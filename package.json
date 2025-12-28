@@ -35,6 +35,13 @@
   "build": {
     "appId": "com.flowestac.app",
     "productName": "FlowEstac",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "jorceli",
+        "repo": "FlowEstac"
+      }
+    ],
     "asar": false,
     "files": [
       "**/*",
