@@ -1,0 +1,5 @@
+{
+  "name": "FlowEstac - Sistema de Estacionamento",
+  "description": "A comprehensive parking management system to manage clients, employees, billing, and vehicle movements. It supports various customer types and provides detailed reporting and system configuration.",
+  "requestFramePermissions": []
+}
