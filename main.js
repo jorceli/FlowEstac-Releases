@@ -157,28 +157,31 @@ ipcMain.handle('print-data', async (event, { data, printerName, width }) => {
     console.log('=== [PRINT-DATA] Sucesso na Impressão ===');
 
     // --- Tenta realizar o corte automático via ESC/POS direto ---
-    // Adicionamos um atraso para permitir que o driver do SO complete a impressão antes de tentarmos o acesso direto USB
+    // Adicionamos um atraso maior para garantir que o driver do SO complete o envio de dados
     setTimeout(() => {
       try {
-        console.log('=== [CUT] Tentando comando de corte ESC/POS (após delay)... ===');
-        const device = new escpos.USB(); // Tenta encontrar a primeira impressora USB ESC/POS de forma genérica
+        console.log('=== [CUT] Tentando comando de corte ESC/POS direto via USB... ===');
+        const device = new escpos.USB(); // Busca dispositivos USB
         const printer = new escpos.Printer(device);
+
         device.open((err) => {
           if (err) {
-            console.warn('=== [CUT] Erro ao abrir dispositivo USB:', err.message);
+            console.warn('=== [CUT] Erro ao abrir dispositivo USB ou nenhum dispositivo encontrado:', err.message);
             return;
           }
+
+          console.log('=== [CUT] Dispositivo USB aberto. Enviando comandos... ===');
           printer
-            .feed(2) // Avança um pouco mais
+            .feed(3) // Avança 3 linhas para garantir que o texto saiu da cabeça de impressão
             .cut()
             .close();
-          console.log('=== [CUT] Comando enviado com sucesso via ESC/POS Direto ===');
+          console.log('=== [CUT] Comando de corte enviado com sucesso. ===');
         });
       } catch (cutError) {
-        console.warn('=== [CUT] Não foi possível encontrar ou enviar comando para impressora USB direta:', cutError.message);
-        // Não falha a operação se o corte direto falhar, pois a impressão já foi concluída via driver
+        console.warn('=== [CUT] Erro na lógica de corte direto:', cutError.message);
+        // Não falha a operação de impressão se o corte direto falhar
       }
-    }, 1500);
+    }, 2500); // Aumentado para 2.5s para maior segurança
 
     return { success: true };
   } catch (error) {

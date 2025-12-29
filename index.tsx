@@ -1342,11 +1342,20 @@ const printReceipt = async (movement: VehicleMovement, basePrice: number, coupon
     ];
 
     // Placa Grande
-    if (couponConfig.highlightPlate) {
-        data.push({ type: 'text', value: 'PLACA: ' + movement.plate, style: { fontWeight: "bold", fontSize: "32px", textAlign: 'center', margin: '5px 0' } });
-    } else {
-        data.push({ type: 'text', value: `Placa: ${movement.plate}`, style: { fontSize: "32px", fontWeight: 'bold', textAlign: 'center' } });
-    }
+    data.push(
+        { type: 'text', value: '============================', style: { textAlign: 'center', fontSize: '10px' } },
+        {
+            type: 'text',
+            value: ` PLACA: ${movement.plate} `,
+            style: {
+                fontWeight: "bold",
+                fontSize: "36px",
+                textAlign: 'center',
+                margin: '10px 0'
+            }
+        },
+        { type: 'text', value: '============================', style: { textAlign: 'center', fontSize: '10px', marginBottom: '5px' } }
+    );
 
     // Detalhes em Tabela
     data.push(
@@ -1380,13 +1389,13 @@ const printReceipt = async (movement: VehicleMovement, basePrice: number, coupon
             data.push({ type: 'text', value: `Acrescimo: +${movement.surcharge.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, style: { fontSize: "12px" } });
         }
 
-        data.push({ type: 'text', value: '-'.repeat(30), style: { textAlign: 'center' } });
+        data.push({ type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } });
         data.push({ type: 'text', value: `TOTAL: ${(movement.totalPaid ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, style: { fontWeight: "bold", fontSize: "16px", textAlign: 'right' } });
         data.push({ type: 'text', value: `Pagamento: ${removeAccents(movement.paymentMethod || 'DINHEIRO')}`, style: { fontSize: "12px", textAlign: 'right' } });
         if (movement.customerCpfOnReceipt) {
             data.push({ type: 'text', value: `CPF: ${movement.customerCpfOnReceipt}`, style: { fontSize: "12px", textAlign: 'right' } });
         }
-        data.push({ type: 'text', value: '-'.repeat(30), style: { textAlign: 'center' } });
+        data.push({ type: 'text', value: '-'.repeat(28), style: { textAlign: 'center', marginBottom: '10px' } });
     }
 
     // Footer
@@ -1447,12 +1456,19 @@ const printSimpleExitCoupon = async (movement: VehicleMovement, couponConfig: Co
         data.push({ type: 'text', value: removeAccents(`Cliente: ${movement.customerName}`), style: { fontSize: "12px", textAlign: 'center' } });
     }
 
-    if (couponConfig.highlightPlate) {
-        // Label Placa e Placa Grande
-        data.push({ type: 'text', value: `PLACA: ${movement.plate}`, style: { fontWeight: "bold", fontSize: "32px", textAlign: 'center', margin: '5px 0' } });
-    } else {
-        data.push({ type: 'text', value: `Placa: ${movement.plate}`, style: { fontSize: "32px", textAlign: 'center', fontWeight: 'bold' } });
-    }
+    // Placa
+    data.push({ type: 'text', value: '============================', style: { textAlign: 'center', fontSize: '10px' } });
+    data.push({
+        type: 'text',
+        value: ` PLACA: ${movement.plate} `,
+        style: {
+            fontSize: "36px",
+            textAlign: 'center',
+            fontWeight: 'bold',
+            margin: '10px 0'
+        }
+    });
+    data.push({ type: 'text', value: '============================', style: { textAlign: 'center', fontSize: '10px', marginBottom: '5px' } });
 
     data.push(
         { type: 'text', value: removeAccents(`Entrada: ${entryTime.toLocaleString('pt-BR')}`), style: { fontSize: "12px" } },
@@ -1473,8 +1489,8 @@ const printSimpleExitCoupon = async (movement: VehicleMovement, couponConfig: Co
         { type: 'text', value: removeAccents(footerMsg), style: { textAlign: 'center', marginTop: '10px', fontSize: '10px' } },
 
 
-        // Feed e Comando de Corte - Aumentado para garantir corte automático
-        { type: 'text', value: '\n\n\n\n\n\n\n\n\n\n', style: { fontSize: '1px' } }
+        // Feed e Comando de Corte - Aumentado para garantir corte automático e evitar sobreposição
+        { type: 'text', value: '\n\n\n\n\n\n\n\n\n\n\n\n', style: { fontSize: '1px' } }
     );
 
     if (window.electronAPI && window.electronAPI.printData) {
@@ -1496,8 +1512,10 @@ const printEntryCoupon = async (movement: VehicleMovement, couponConfig: CouponP
         { type: 'text', value: removeAccents(`Tipo: ${movement.customerType || 'ROTATIVO'}`), style: { fontSize: "12px", textAlign: 'center', fontWeight: 'bold' } },
         ...(movement.customerName && movement.customerName !== 'AVULSO' ? [{ type: 'text', value: removeAccents(`Cliente: ${movement.customerName}`), style: { fontSize: "12px", textAlign: 'center' } }] : []),
 
-        // Placa Bem Grande
-        { type: 'text', value: 'PLACA: ' + movement.plate, style: { fontWeight: "bold", fontSize: "32px", textAlign: 'center', margin: '10px 0' } },
+        // Placa
+        { type: 'text', value: '============================', style: { textAlign: 'center', fontSize: '10px' } },
+        { type: 'text', value: ` PLACA: ${movement.plate} `, style: { fontWeight: "bold", fontSize: "36px", textAlign: 'center', margin: '10px 0' } },
+        { type: 'text', value: '============================', style: { textAlign: 'center', fontSize: '10px', marginBottom: '5px' } },
 
         // Categoria e Modelo
         { type: 'text', value: removeAccents(`Cat: ${movement.vehicleType.toUpperCase()} / ${movement.model?.toUpperCase() || ''}`), style: { fontSize: "12px", textAlign: 'center', marginBottom: '5px' } },
