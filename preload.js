@@ -59,6 +59,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   printData: (data, printerName, width) => ipcRenderer.invoke('print-data', { data, printerName, width }),
 
   /**
+   * Obtém a versão do aplicativo.
+   */
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+
+  /**
    * Fecha a aplicação.
    */
   closeApp: () => ipcRenderer.send('app-close'),

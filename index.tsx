@@ -264,6 +264,7 @@ export interface IElectronAPI {
     getPrinters: () => Promise<any[]>;
     printHtml: (content: string, printerName?: string, printWidth?: number) => Promise<{ success: boolean; error?: string }>;
     printData: (data: any[], printerName?: string, width?: string | number) => Promise<{ success: boolean; error?: string }>;
+    getAppVersion: () => Promise<string>;
     closeApp: () => void;
 }
 
@@ -688,6 +689,14 @@ const Sidebar: React.FC<{
     onLogout: () => void;
     updateReady: boolean;
 }> = ({ currentPage, setCurrentPage, loggedInUser, onLogout, updateReady }) => {
+    const [version, setVersion] = useState<string>('...');
+
+    useEffect(() => {
+        if (window.electronAPI && window.electronAPI.getAppVersion) {
+            window.electronAPI.getAppVersion().then(setVersion);
+        }
+    }, []);
+
     const menuItems = [
         { id: 'dashboard', label: 'Dashboard', icon: DashboardIcon },
         { id: 'movements', label: 'Movimentação', icon: CarIcon },
@@ -753,7 +762,7 @@ const Sidebar: React.FC<{
 
             <div className="p-4 border-t border-slate-200 dark:border-slate-700 text-center text-xs text-slate-400">
                 <p>&copy; {new Date().getFullYear()} FlowEstac</p>
-                <p>Versão 1.1.0</p>
+                <p>Versão {version}</p>
             </div>
         </aside>
     );

@@ -54,6 +54,10 @@ app.whenReady().then(() => {
   });
 });
 
+ipcMain.handle('get-app-version', () => {
+  return app.getVersion();
+});
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
@@ -132,11 +136,11 @@ ipcMain.handle('print-data', async (event, { data, printerName, width }) => {
   }
 
   // Define pageSize explicitamente para 80mm para forçar o driver (se possível)
-  // e evitar A4.
+  // e evitar A4. Algumas impressoras podem precisar de um objeto de tamanho.
   const options = {
     preview: false,
     width: safeWidth,
-    pageSize: '80mm', // Força papel 80mm
+    pageSize: { height: 100000, width: 80000 }, // Tenta forçar 80mm com altura "infinita" (contínua)
     margin: '0 0 0 0',
     copies: 1,
     printerName: printerName,
@@ -144,10 +148,11 @@ ipcMain.handle('print-data', async (event, { data, printerName, width }) => {
     silent: true,
   };
 
-  console.log('=== [PRINT-DATA] Iniciando Impressão ===');
-  console.log('Impressora:', printerName);
-  console.log('Opções:', JSON.stringify(options, null, 2));
-  console.log('Dados (primeiros 3 itens):', JSON.stringify(data.slice(0, 3), null, 2));
+  console.log('=== [PRINT-DATA] Iniciando Impressão (v1.1.2) ===');
+  console.log('Impressora Selecionada:', printerName);
+  console.log('Safe Width:', safeWidth);
+  console.log('Opções Aplicadas:', JSON.stringify(options, null, 2));
+  console.log('Dados a serem impressos (itens):', data.length);
 
   try {
     if (!data || data.length === 0) {
