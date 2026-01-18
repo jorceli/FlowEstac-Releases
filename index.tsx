@@ -1,16 +1,19 @@
 ﻿
 import React, { useState, useMemo, useEffect, createContext, useContext, ReactNode, useRef } from 'react';
 import ReactDOM from 'react-dom/client';
-import { GeneralSettings, PricingSettings, ServicesSettings, PaymentsSettings, AgreementsSettings, CouponsSettings, PrintingSettings, BackupSettings } from './components/settings';
+import { GeneralSettings, PricingSettings, ServicesSettings, PaymentsSettings, AgreementsSettings, CouponsSettings, PrintingSettings, BackupSettings, NfseSettings, ModulesSettings } from './components/settings';
 
 // =================================================================
 // ERROR BOUNDARY & FAILSAFE
 // =================================================================
 
-class ErrorBoundary extends React.Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
-    constructor(props: { children: ReactNode }) {
+class ErrorBoundary extends React.Component<any, any> {
+    _children: any;
+    state = { hasError: false, error: null as Error | null };
+
+    constructor(props: any) {
         super(props);
-        this.state = { hasError: false, error: null };
+        this._children = props?.children;
     }
 
     static getDerivedStateFromError(error: Error) {
@@ -30,7 +33,7 @@ class ErrorBoundary extends React.Component<{ children: ReactNode }, { hasError:
                 </div>
             );
         }
-        return (this.props as { children: ReactNode }).children;
+        return this._children;
     }
 }
 
@@ -180,6 +183,14 @@ export interface MonthlyPaymentLog {
     paymentDate: Date;
     amountPaid: number;
     operator: string;
+    paymentMethod: string;
+}
+
+export interface SystemLog {
+    id: string;
+    time: Date;
+    type: 'Login' | 'Logout';
+    operator: string;
 }
 
 
@@ -251,6 +262,18 @@ export interface PrinterConfig {
     printerName?: string;
 }
 
+export interface NfseConfig {
+    cnpj: string;
+    im: string;
+    cnae: string;
+    certPath: string;
+    certPassword?: string;
+    isHomologation: boolean;
+    autoEmit: boolean;
+    certExpiration?: string;
+    certSubject?: string;
+}
+
 // --- Tipos para a nova arquitetura Electron ---
 
 // Interface para a API exposta pelo preload.js
@@ -262,8 +285,12 @@ export interface IElectronAPI {
     restartComputer: () => void;
     shutdownComputer: () => void;
     getPrinters: () => Promise<any[]>;
+    onUpdateStatus: (callback: (status: string) => void) => void;
     printHtml: (content: string, printerName?: string, printWidth?: number) => Promise<{ success: boolean; error?: string }>;
     printData: (data: any[], printerName?: string, width?: string | number) => Promise<{ success: boolean; error?: string }>;
+    emitNfse: (movement: VehicleMovement, config: NfseConfig) => Promise<{ success: boolean; error?: string }>;
+    checkCertificateInfo: (certPath: string, certPassword?: string) => Promise<{ success: boolean; expiration?: string; subject?: string; error?: string }>;
+    checkAsaasLicense: (cnpj: string) => Promise<{ success: boolean; status?: string; message?: string; error?: string }>;
     getAppVersion: () => Promise<string>;
     closeApp: () => void;
 }
@@ -276,6 +303,20 @@ const maskCPF = (value: string) => {
         .replace(/(-\d{2})\d+?$/, '$1');
 };
 
+const sendWhatsAppMessage = (phone: string, message: string) => {
+    if (!phone) return;
+    const cleanPhone = phone.replace(/\D/g, '');
+    const fullPhone = cleanPhone.length <= 11 ? `55${cleanPhone}` : cleanPhone; // Add Brazil country code if missing
+    const encodedMessage = encodeURIComponent(message);
+    const url = `https://web.whatsapp.com/send?phone=${fullPhone}&text=${encodedMessage}`;
+
+    // Open in a new window using the window.open API. 
+    // Since this is Electron, we might need shell.openExternal (via Main process) for better integration, 
+    // but window.open usually works if 'setWindowOpenHandler' is configured in main.js. 
+    // If not, a standard anchor tag also works.
+    window.open(url, '_blank', 'noreferrer');
+};
+
 const maskPhone = (value: string) => {
     return value
         .replace(/\D/g, '')
@@ -286,6 +327,24 @@ const maskPhone = (value: string) => {
 const capitalizeFirstLetter = (value: string) => {
     if (!value) return '';
     return value.charAt(0).toUpperCase() + value.slice(1);
+};
+
+const maskCNPJ = (value: string) => {
+    return value
+        .replace(/\D/g, '')
+        .replace(/^(\d{2})(\d)/, '$1.$2')
+        .replace(/^(\d{2})\.(\d{3})(\d)/, '$1.$2.$3')
+        .replace(/\.(\d{3})(\d)/, '.$1/$2')
+        .replace(/(\d{4})(\d)/, '$1-$2')
+        .replace(/(-\d{2})\d+?$/, '$1');
+};
+
+const pushPaperFeed = (data: any[], lines: number) => {
+    const safeLines = Math.max(0, Math.floor(lines));
+    for (let i = 0; i < safeLines; i++) {
+        data.push({ type: 'text', value: ' ', style: { fontSize: '10px' } });
+    }
+    data.push({ type: 'text', value: '.', style: { color: 'white', fontSize: '1px' } });
 };
 
 // Adiciona a electronAPI ao objeto global Window para type-safety
@@ -312,6 +371,7 @@ export interface BackupData {
     cancellationReasons: CancellationReason[];
     couponPrintConfig: CouponPrintConfig;
     printerConfig: PrinterConfig;
+    systemLogs?: SystemLog[];
 }
 
 // =================================================================
@@ -404,6 +464,12 @@ const DownloadIcon = (props: React.SVGProps<SVGSVGElement>) => (
     </svg>
 );
 
+const ChatIcon = (props: React.SVGProps<SVGSVGElement>) => (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5" {...props}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z" />
+    </svg>
+);
+
 // =================================================================
 // AUTH CONTEXT
 // =================================================================
@@ -430,6 +496,7 @@ export interface GeneralSettings {
     cancellationPassword?: string;
     discountPassword?: string;
     parkingLimit?: number;
+    lastLicenseCheck?: string; // ISO Date
 }
 const initialCustomers: Customer[] = [
     { id: '1', name: 'PAULO DA SILVA', cpfCnpj: '123.456.789-01', plate: 'BRA2E19', plate2: 'XYZ1234', phone: '(51) 9988-7766', customerType: CustomerType.MENSALISTA, lastPayment: '2024-06-10', isMensalista: true, isMensalistaDiurno: true, startDate: '2023-01-15', monthlyFee: 250.00, addressStreet: 'Av. Ipiranga', addressNumber: '123', addressNeighborhood: 'Partenon', addressCity: 'Porto Alegre', addressState: 'RS', addressZip: '90000-000' },
@@ -448,6 +515,17 @@ const initialCancellationReasons: CancellationReason[] = [{ id: '1', reason: 'En
 const initialCouponPrintConfig: CouponPrintConfig = { headerMessage: 'ESTACIONAMENTO RUA RIACHUELO, 901\nTELEFONE/WHATSAPP 51 998595952', footerMessage: 'HORÁRIOS FUNCIONAMENTO:\nSEGUNDA A SEXTA DAS 07:00 HRS ÀS 19:00 HRS\n\nVOLTE SEMPRE!!!', entryCopies: 1, exitCopies: 1, validatePlate: true, highlightPlate: true, printCouponNumberInFooter: false, showSummary: true, showOverdueMonthly: false, printBarcode: false, };
 const initialPrinterConfig: PrinterConfig = { profile: 'generic_80mm', printWidth: 300, };
 const initialGeneralSettings: GeneralSettings = { cancellationPassword: '', discountPassword: '', parkingLimit: 100 };
+const initialNfseConfig: NfseConfig = {
+    cnpj: '',
+    im: '',
+    cnae: '',
+    certPath: '',
+    certPassword: '',
+    isHomologation: true,
+    autoEmit: false,
+    certExpiration: '',
+    certSubject: ''
+};
 
 // --- DATA SANITIZATION ---
 const sanitizeMovements = (data: any[]): VehicleMovement[] => {
@@ -483,7 +561,7 @@ const sanitizeMovements = (data: any[]): VehicleMovement[] => {
     }, []);
 };
 
-const sanitizeDateArray = <T extends { cancellationTime?: any; paymentDate?: any; movement?: any }>(data: any[], dateField: keyof T): T[] => {
+const sanitizeDateArray = <T extends { cancellationTime?: any; paymentDate?: any; movement?: any; time?: any }>(data: any[], dateField: keyof T): T[] => {
     if (!Array.isArray(data)) return [];
     return data.filter(item => item && item[dateField] && !isNaN(new Date(item[dateField]).getTime())).map(item => ({
         ...item,
@@ -500,6 +578,18 @@ const sanitizeDateArray = <T extends { cancellationTime?: any; paymentDate?: any
 
 
 // --- DATA CONTEXT ---
+interface AppModules {
+    lpr: boolean;
+    whatsapp: boolean;
+    barriers: boolean;
+}
+
+const initialAppModules: AppModules = {
+    lpr: false,
+    whatsapp: false,
+    barriers: false,
+};
+
 interface DataContextProps {
     customers: Customer[];
     setCustomers: React.Dispatch<React.SetStateAction<Customer[]>>;
@@ -531,6 +621,10 @@ interface DataContextProps {
     setCancellationLogs: React.Dispatch<React.SetStateAction<CancellationLog[]>>;
     monthlyPaymentLogs: MonthlyPaymentLog[];
     setMonthlyPaymentLogs: React.Dispatch<React.SetStateAction<MonthlyPaymentLog[]>>;
+    systemLogs: SystemLog[];
+    setSystemLogs: React.Dispatch<React.SetStateAction<SystemLog[]>>;
+    nfseConfig: NfseConfig;
+    setNfseConfig: React.Dispatch<React.SetStateAction<NfseConfig>>;
     restoreBackup: (data: BackupData) => void;
     isDataLoaded: boolean;
 }
@@ -553,6 +647,9 @@ const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
     const [printerConfig, setPrinterConfig] = useState<PrinterConfig>(initialPrinterConfig);
     const [cancellationLogs, setCancellationLogs] = useState<CancellationLog[]>([]);
     const [monthlyPaymentLogs, setMonthlyPaymentLogs] = useState<MonthlyPaymentLog[]>([]);
+    const [systemLogs, setSystemLogs] = useState<SystemLog[]>([]);
+    const [nfseConfig, setNfseConfig] = useState<NfseConfig>(initialNfseConfig);
+    const [modules, setModules] = useState<AppModules>(initialAppModules);
     const [isDataLoaded, setIsDataLoaded] = useState(false);
 
     // Efeito para CARREGAR todos os dados na montagem do componente
@@ -594,6 +691,15 @@ const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
                 const rawMonthlyPayments = await window.electronAPI.loadData('flowestac_monthly_payments', []);
                 setMonthlyPaymentLogs(sanitizeDateArray(rawMonthlyPayments, 'paymentDate'));
 
+                const rawSystemLogs = await window.electronAPI.loadData('flowestac_system_logs', []);
+                setSystemLogs(sanitizeDateArray(rawSystemLogs, 'time'));
+
+                const loadedNfse = await window.electronAPI.loadData('flowestac_nfse_config', initialNfseConfig);
+                setNfseConfig({ ...initialNfseConfig, ...loadedNfse });
+
+                const loadedModules = await window.electronAPI.loadData('flowestac_modules', initialAppModules);
+                setModules({ ...initialAppModules, ...loadedModules });
+
             } catch (error) {
                 console.error("Failed to load data, using initial defaults.", error);
                 // Fallback to initial data in case of a critical loading error
@@ -624,6 +730,8 @@ const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
     useEffect(() => { if (isDataLoaded) window.electronAPI.saveData('flowestac_printer_config', printerConfig); }, [printerConfig, isDataLoaded]);
     useEffect(() => { if (isDataLoaded) window.electronAPI.saveData('flowestac_cancellation_logs', cancellationLogs); }, [cancellationLogs, isDataLoaded]);
     useEffect(() => { if (isDataLoaded) window.electronAPI.saveData('flowestac_monthly_payments', monthlyPaymentLogs); }, [monthlyPaymentLogs, isDataLoaded]);
+    useEffect(() => { if (isDataLoaded) window.electronAPI.saveData('flowestac_system_logs', systemLogs); }, [systemLogs, isDataLoaded]);
+    useEffect(() => { if (isDataLoaded) window.electronAPI.saveData('flowestac_nfse_config', nfseConfig); }, [nfseConfig, isDataLoaded]);
 
 
     // Função para restaurar todos os dados de um backup
@@ -643,6 +751,7 @@ const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
         setPrinterConfig({ ...initialPrinterConfig, ...(data.printerConfig || {}) });
         setCancellationLogs(sanitizeDateArray(data.cancellationLogs || [], 'cancellationTime'));
         setMonthlyPaymentLogs(sanitizeDateArray(data.monthlyPaymentLogs || [], 'paymentDate'));
+        setSystemLogs(sanitizeDateArray(data.systemLogs || [], 'time'));
         alert('Backup restaurado com sucesso! Os dados foram carregados.');
     };
 
@@ -662,6 +771,9 @@ const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
         printerConfig, setPrinterConfig,
         cancellationLogs, setCancellationLogs,
         monthlyPaymentLogs, setMonthlyPaymentLogs,
+        systemLogs, setSystemLogs,
+        nfseConfig, setNfseConfig,
+        modules, setModules,
         restoreBackup,
         isDataLoaded
     };
@@ -688,12 +800,19 @@ const Sidebar: React.FC<{
     loggedInUser: Employee;
     onLogout: () => void;
     updateReady: boolean;
-}> = ({ currentPage, setCurrentPage, loggedInUser, onLogout, updateReady }) => {
+    licenseStatus: 'checking' | 'active' | 'blocked' | 'offline';
+    nfseConfig: NfseConfig;
+}> = ({ currentPage, setCurrentPage, loggedInUser, onLogout, updateReady, licenseStatus, nfseConfig }) => {
     const [version, setVersion] = useState<string>('...');
+    const [updateStatus, setUpdateStatus] = useState<string>('');
+    const [isCollapsed, setIsCollapsed] = useState(false);
 
     useEffect(() => {
         if (window.electronAPI && window.electronAPI.getAppVersion) {
             window.electronAPI.getAppVersion().then(setVersion);
+        }
+        if (window.electronAPI && window.electronAPI.onUpdateStatus) {
+            window.electronAPI.onUpdateStatus((status) => setUpdateStatus(status));
         }
     }, []);
 
@@ -710,27 +829,84 @@ const Sidebar: React.FC<{
         ? menuItems
         : menuItems.filter(item => item.id === 'dashboard');
 
+    // Lógica do Status do Certificado (Simplificada para modo recolhido)
+    let certStatusText = 'Certificado Não Configurado';
+    let certStatusColor = 'text-slate-500';
+    let certStatusBg = 'bg-slate-400';
+    let certDotColor = 'bg-slate-400';
+
+    if (nfseConfig.certPath) {
+        if (nfseConfig.certExpiration) {
+            const expirationDate = new Date(nfseConfig.certExpiration);
+            const today = new Date();
+            if (expirationDate < today) {
+                certStatusText = 'Certificado Vencido';
+                certStatusColor = 'text-red-600';
+                certStatusBg = 'bg-red-500';
+                certDotColor = 'bg-red-500';
+            } else {
+                certStatusText = 'Certificado OK';
+                certStatusColor = 'text-green-600';
+                certStatusBg = 'bg-green-500';
+                certDotColor = 'bg-green-500';
+            }
+        } else {
+            certStatusText = 'Certificado Pendente';
+            certStatusColor = 'text-orange-600';
+            certStatusBg = 'bg-orange-500';
+            certDotColor = 'bg-orange-500';
+        }
+    }
+
     return (
-        <aside className="w-64 bg-white dark:bg-slate-800 flex-shrink-0 shadow-lg flex flex-col">
-            <nav className="flex-1 px-4 py-8">
-                <ul>
+        <aside className={`${isCollapsed ? 'w-20' : 'w-64'} bg-slate-50 dark:bg-slate-900 flex-shrink-0 shadow-xl flex flex-col transition-all duration-300 ease-in-out border-r border-slate-200 dark:border-slate-800 relative`}>
+            {/* Toggle Button */}
+            <button
+                onClick={() => setIsCollapsed(!isCollapsed)}
+                className="absolute -right-3 top-6 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-full p-1 shadow-md hover:bg-slate-100 dark:hover:bg-slate-600 transition-colors z-50 text-slate-500 dark:text-slate-300"
+                title={isCollapsed ? "Expandir" : "Recolher"}
+            >
+                {isCollapsed ? (
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+                    </svg>
+                ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
+                    </svg>
+                )}
+            </button>
+
+            <nav className="flex-1 px-3 py-6 overflow-y-auto overflow-x-hidden">
+                <ul className="space-y-2">
                     {visibleMenuItems.map((item) => {
                         const IconComponent = item.icon;
+                        const isActive = currentPage === item.id;
                         return (
-                            <li key={item.id} className="mb-2">
+                            <li key={item.id}>
                                 <a
                                     href="#"
                                     onClick={(e) => {
                                         e.preventDefault();
                                         setCurrentPage(item.id as Page);
                                     }}
-                                    className={`flex items-center p-3 rounded-lg transition-all duration-200 ${currentPage === item.id
-                                        ? 'bg-blue-600 text-white shadow-md'
-                                        : 'text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                                    className={`flex items-center ${isCollapsed ? 'justify-center px-0' : 'px-3'} py-3 rounded-xl transition-all duration-200 group relative ${isActive
+                                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/30'
+                                        : 'text-slate-600 dark:text-slate-400 hover:bg-white dark:hover:bg-slate-800 hover:text-blue-600 dark:hover:text-blue-400 hover:shadow-md'
                                         }`}
+                                    title={isCollapsed ? item.label : ''}
                                 >
-                                    <IconComponent className="h-5 w-5 mr-3" />
-                                    <span className="font-medium">{item.label}</span>
+                                    <IconComponent className={`h-6 w-6 flex-shrink-0 transition-transform duration-200 ${!isCollapsed && isActive ? 'animate-pulse_once' : ''}`} />
+                                    <span className={`font-medium ml-3 whitespace-nowrap overflow-hidden transition-all duration-300 ${isCollapsed ? 'w-0 opacity-0 ml-0' : 'w-auto opacity-100'}`}>
+                                        {item.label}
+                                    </span>
+
+                                    {/* Tooltip for collapsed mode */}
+                                    {isCollapsed && (
+                                        <div className="absolute left-full ml-2 px-2 py-1 bg-slate-800 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nw shadow-lg z-50">
+                                            {item.label}
+                                        </div>
+                                    )}
                                 </a>
                             </li>
                         )
@@ -738,32 +914,63 @@ const Sidebar: React.FC<{
                 </ul>
             </nav>
 
+            <div className={`px-4 py-4 border-t border-slate-200 dark:border-slate-800 space-y-3 bg-slate-100/50 dark:bg-slate-800/50 transition-all duration-300 ${isCollapsed ? 'items-center flex flex-col' : ''}`}>
+
+                {/* Status System */}
+                <div className={`flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider transition-all duration-200 ${isCollapsed ? 'justify-center' : ''}`} title={isCollapsed ? (licenseStatus === 'active' ? 'Online' : 'Offline') : ''}>
+                    <div className={`w-2.5 h-2.5 rounded-full ring-2 ring-white dark:ring-slate-700 shadow-sm flex-shrink-0 ${licenseStatus === 'active' ? 'bg-green-500' : licenseStatus === 'blocked' ? 'bg-red-500' : licenseStatus === 'offline' ? 'bg-orange-500' : 'bg-slate-400 animate-pulse'}`} />
+                    <span className={`whitespace-nowrap overflow-hidden transition-all duration-300 ${isCollapsed ? 'w-0 opacity-0 hidden' : 'w-auto opacity-100'} ${licenseStatus === 'active' ? 'text-green-600' : licenseStatus === 'blocked' ? 'text-red-600' : licenseStatus === 'offline' ? 'text-orange-600' : 'text-slate-500'}`}>
+                        {licenseStatus === 'active' ? 'Sistema Online' :
+                            licenseStatus === 'blocked' ? 'Bloqueado' :
+                                licenseStatus === 'offline' ? 'Offline' : 'Verificando...'}
+                    </span>
+                </div>
+
+                {/* Status Certificado */}
+                <div className={`flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider transition-all duration-200 ${isCollapsed ? 'justify-center' : ''}`} title={isCollapsed ? certStatusText : ''}>
+                    <div className={`w-2.5 h-2.5 rounded-full ring-2 ring-white dark:ring-slate-700 shadow-sm flex-shrink-0 ${certDotColor}`} />
+                    <span className={`whitespace-nowrap overflow-hidden transition-all duration-300 ${isCollapsed ? 'w-0 opacity-0 hidden' : 'w-auto opacity-100'} ${certStatusColor}`}>
+                        {certStatusText}
+                    </span>
+                </div>
+            </div>
+
+
+            {updateStatus && !isCollapsed && (
+                <div className="px-4 py-2 text-xs text-center text-blue-600 dark:text-blue-400 font-medium animate-pulse bg-blue-50 dark:bg-blue-900/20 mx-2 rounded-lg mb-2">
+                    {updateStatus}
+                </div>
+            )}
+
             {updateReady && (
-                <div className="px-4 py-3">
+                <div className={`px-2 py-2 ${isCollapsed ? 'flex justify-center' : 'px-4'}`}>
                     <button
                         onClick={() => window.electronAPI.restartApp()}
-                        className="w-full flex items-center justify-center p-3 rounded-lg transition-all duration-200 text-white bg-green-600 hover:bg-green-700 animate-pulse"
+                        className={`flex items-center justify-center p-2 rounded-xl transition-all duration-200 text-white bg-green-600 hover:bg-green-700 animate-pulse shadow-md ${isCollapsed ? 'w-10 h-10' : 'w-full'}`}
+                        title="Instalar Atualização"
                     >
-                        <DownloadIcon className="h-5 w-5 mr-3" />
-                        <span className="font-medium">Instalar Atualização</span>
+                        <DownloadIcon className="h-5 w-5" />
+                        {!isCollapsed && <span className="font-medium ml-2 text-sm">Atualizar</span>}
                     </button>
                 </div>
             )}
 
-            <div className="px-4 py-3">
+            <div className={`p-2 ${isCollapsed ? 'flex justify-center' : 'px-4 pb-4'}`}>
                 <button
                     onClick={onLogout}
-                    className="w-full flex items-center justify-center p-3 rounded-lg transition-all duration-200 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/50"
+                    className={`flex items-center justify-center p-2 rounded-xl transition-all duration-200 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 border border-transparent hover:border-red-200 dark:hover:border-red-800 ${isCollapsed ? 'w-10 h-10' : 'w-full hover:shadow-sm'}`}
+                    title="Sair do Sistema"
                 >
-                    <LogoutIcon className="h-5 w-5 mr-3" />
-                    <span className="font-medium">Sair</span>
+                    <LogoutIcon className="h-5 w-5" />
+                    {!isCollapsed && <span className="font-medium ml-2 text-sm">Sair</span>}
                 </button>
             </div>
 
-            <div className="p-4 border-t border-slate-200 dark:border-slate-700 text-center text-xs text-slate-400">
-                <p>&copy; {new Date().getFullYear()} FlowEstac</p>
-                <p>Versão {version}</p>
-            </div>
+            {!isCollapsed && (
+                <div className="pb-4 text-center text-[10px] text-slate-400 font-medium">
+                    <p className="opacity-70">FlowEstac v1.1.35</p>
+                </div>
+            )}
         </aside>
     );
 };
@@ -788,7 +995,7 @@ const getChargeTypeFromCustomerType = (customerType: CustomerType): ChargeType =
 
 // --- Dashboard (from components/Dashboard.tsx) ---
 const Dashboard: React.FC = () => {
-    const { movements, setMovements, customers, services, generalSettings, couponPrintConfig, printerConfig, setCancellationLogs } = useData();
+    const { movements, setMovements, customers, services, generalSettings, couponPrintConfig, printerConfig, setCancellationLogs, modules } = useData();
     const { loggedInUser } = useAuth();
     const [isMonthlyPaymentModalOpen, setIsMonthlyPaymentModalOpen] = useState(false);
     const [isCashClosingModalOpen, setIsCashClosingModalOpen] = useState(false);
@@ -796,6 +1003,8 @@ const Dashboard: React.FC = () => {
     const [selectedMovementForEdit, setSelectedMovementForEdit] = useState<VehicleMovement | null>(null);
     const [movementToCancel, setMovementToCancel] = useState<VehicleMovement | null>(null);
     const [movementForPrint, setMovementForPrint] = useState<VehicleMovement | null>(null);
+    const [isConfirmEntryModalOpen, setIsConfirmEntryModalOpen] = useState(false);
+    const [lastRegisteredMovement, setLastRegisteredMovement] = useState<VehicleMovement | null>(null);
 
     // State for Quick Entry form
     const [plate, setPlate] = useState('');
@@ -811,7 +1020,28 @@ const Dashboard: React.FC = () => {
     const [plateSearch, setPlateSearch] = useState('');
     const plateInputRef = useRef<HTMLInputElement>(null);
 
-    // Shortcuts
+    // Focus management
+    const focusPlateInput = () => {
+        if (
+            !isMonthlyPaymentModalOpen &&
+            !isCashClosingModalOpen &&
+            !selectedMovementForPayment &&
+            !selectedMovementForEdit &&
+            !movementToCancel &&
+            !movementForPrint &&
+            !isConfirmEntryModalOpen
+        ) {
+            // Use requestAnimationFrame for smoother focus transition
+            requestAnimationFrame(() => {
+                if (plateInputRef.current) {
+                    plateInputRef.current.focus();
+                    plateInputRef.current.select();
+                }
+            });
+        }
+    };
+
+    // Shortcuts and window focus
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
             if (event.key === 'F12') {
@@ -823,11 +1053,38 @@ const Dashboard: React.FC = () => {
                 plateInputRef.current?.focus();
             }
         };
+
+        const handleWindowFocus = () => focusPlateInput();
+
+        const handleDocumentClick = (e: MouseEvent) => {
+            // If the user clicks on the document, try to refocus the plate input
+            // but only if they didn't click on an input, button or inside a modal.
+            const target = e.target as HTMLElement;
+            const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT';
+            const isButton = target.closest('button');
+            const isModal = target.closest('[role="dialog"]') || target.closest('.fixed.inset-0');
+
+            if (!isInput && !isButton && !isModal) {
+                focusPlateInput();
+            }
+        };
+
         window.addEventListener('keydown', handleKeyDown);
+        window.addEventListener('focus', handleWindowFocus);
+        document.addEventListener('mousedown', handleDocumentClick);
+        focusPlateInput(); // Initial focus
+
         return () => {
             window.removeEventListener('keydown', handleKeyDown);
+            window.removeEventListener('focus', handleWindowFocus);
+            document.removeEventListener('mousedown', handleDocumentClick);
         };
-    }, []);
+    }, [isMonthlyPaymentModalOpen, isCashClosingModalOpen, selectedMovementForPayment, selectedMovementForEdit, movementToCancel, movementForPrint]);
+
+    // Auto-focus when returning from modals or clearing plate
+    useEffect(() => {
+        focusPlateInput();
+    }, [isMonthlyPaymentModalOpen, isCashClosingModalOpen, selectedMovementForPayment, selectedMovementForEdit, movementToCancel, movementForPrint, isConfirmEntryModalOpen]);
 
     const Clock = () => {
         const [time, setTime] = useState(new Date());
@@ -912,17 +1169,43 @@ const Dashboard: React.FC = () => {
         };
 
         setMovements(prev => [newMovement, ...prev]);
-
-        // Pergunta se deseja imprimir o cupom
-        if (window.confirm("Veículo Registrado!\n\nDeseja imprimir o cupom de entrada?")) {
-            printEntryCoupon(newMovement, couponPrintConfig, printerConfig);
-        }
+        setLastRegisteredMovement(newMovement);
 
         setPlate('');
         setModel('');
         setEntryCustomerName('');
         setEntryCustomerPhone('');
         setSelectedServices([]);
+        // Use requestAnimationFrame to ensure the Enter key event cycle is complete 
+        // before opening the modal, preventing auto-confirmation.
+        requestAnimationFrame(() => {
+            setIsConfirmEntryModalOpen(true);
+        });
+    };
+
+    const handlePlateKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+        // Prevent event propagation if the confirmation modal is open 
+        // to avoid validation errors when confirming with Enter.
+        if (isConfirmEntryModalOpen) return;
+
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            e.stopPropagation();
+            handleRegisterEntry();
+        }
+    };
+
+    const handleConfirmPrintEntry = () => {
+        if (lastRegisteredMovement) {
+            printEntryCoupon(lastRegisteredMovement, couponPrintConfig, printerConfig, modules);
+        }
+        setIsConfirmEntryModalOpen(false);
+        focusPlateInput();
+    };
+
+    const handleCloseConfirmPrintEntry = () => {
+        setIsConfirmEntryModalOpen(false);
+        focusPlateInput();
     };
 
     const handleConfirmMonthlyExit = (movement: VehicleMovement) => {
@@ -936,14 +1219,20 @@ const Dashboard: React.FC = () => {
         };
         setMovements(prev => prev.map(m => m.id === movement.id ? updatedMovement : m));
         alert(`Saída do mensalista (Placa: ${movement.plate}) registrada com sucesso.`);
+        focusPlateInput();
     };
 
     const handleRowDoubleClick = (movement: VehicleMovement) => {
         if (movement.status !== 'parked') return;
 
         if (movement.chargeType === ChargeType.MENSAL) {
-            if (window.confirm(`Confirmar saída para o mensalista com placa ${movement.plate}? Esta ação não registrará pagamento.`)) {
-                handleConfirmMonthlyExit(movement);
+            // If the mensalista has services, we need to go to PaymentModal to charge them.
+            if (movement.services && movement.services.length > 0) {
+                setSelectedMovementForPayment(movement);
+            } else {
+                if (window.confirm(`Confirmar saída para o mensalista com placa ${movement.plate}? Esta ação não registrará pagamento.`)) {
+                    handleConfirmMonthlyExit(movement);
+                }
             }
         } else {
             setSelectedMovementForPayment(movement);
@@ -990,6 +1279,8 @@ const Dashboard: React.FC = () => {
             alert("Senha incorreta. A exclusão foi cancelada.");
         }
         setMovementToCancel(null);
+        // Ensure focus returns to the plate input after modal closure
+        requestAnimationFrame(() => focusPlateInput());
     };
 
     const handleEditClick = (movement: VehicleMovement) => {
@@ -1053,6 +1344,11 @@ const Dashboard: React.FC = () => {
             />
             <EditMovementModal movement={selectedMovementForEdit} onClose={() => setSelectedMovementForEdit(null)} onSave={handleSaveEditedMovement} />
             <RegisterMonthlyPaymentModal isOpen={isMonthlyPaymentModalOpen} onClose={() => setIsMonthlyPaymentModalOpen(false)} />
+            <ConfirmEntryModal
+                isOpen={isConfirmEntryModalOpen}
+                onClose={handleCloseConfirmPrintEntry}
+                onConfirm={handleConfirmPrintEntry}
+            />
             <CancellationModal
                 isOpen={!!movementToCancel}
                 onClose={() => setMovementToCancel(null)}
@@ -1089,7 +1385,7 @@ const Dashboard: React.FC = () => {
                     <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 items-end">
                         <div className="flex flex-col"><label className="text-xs font-bold mb-1">Tipo Cobrança</label><select value={customerType} onChange={(e) => setCustomerType(e.target.value as CustomerType)} className="p-2 border rounded-md dark:bg-slate-700 dark:border-slate-600">{Object.values(CustomerType).map(type => <option key={type} value={type}>{type}</option>)}</select></div>
                         <div className="flex flex-col"><label className="text-xs font-bold mb-1">Categoria</label><select value={vehicleType} onChange={(e) => setVehicleType(e.target.value as VehicleType)} className="p-2 border rounded-md dark:bg-slate-700 dark:border-slate-600">{Object.values(VehicleType).map(type => <option key={type} value={type}>{type}</option>)}</select></div>
-                        <div className="flex flex-col"><label className="text-xs font-bold mb-1">Informe a Placa (F1)</label><input type="text" placeholder="Placa*" ref={plateInputRef} value={plate} onChange={handlePlateChange} className="p-2 border rounded-md dark:bg-slate-700 dark:border-slate-600" /></div>
+                        <div className="flex flex-col"><label className="text-xs font-bold mb-1">Informe a Placa (F1)</label><input type="text" placeholder="Placa*" ref={plateInputRef} value={plate} onChange={handlePlateChange} onKeyDown={handlePlateKeyDown} className="p-2 border rounded-md dark:bg-slate-700 dark:border-slate-600" /></div>
                         <div className="flex flex-col"><label className="text-xs font-bold mb-1">Modelo</label><input type="text" placeholder="Modelo" value={model} onChange={(e) => setModel(capitalizeFirstLetter(e.target.value))} className="p-2 border rounded-md dark:bg-slate-700 dark:border-slate-600" /></div>
                         <div className="flex flex-col col-span-2 md:col-span-2 lg:col-span-1"><label className="text-xs font-bold mb-1">Nome do Cliente</label><input type="text" placeholder="Nome do Cliente" value={entryCustomerName} onChange={(e) => setEntryCustomerName(capitalizeFirstLetter(e.target.value))} className="p-2 border rounded-md dark:bg-slate-700 dark:border-slate-600" /></div>
                         <div className="flex flex-col"><label className="text-xs font-bold mb-1">Telefone</label><input type="text" placeholder="Telefone" value={entryCustomerPhone} onChange={(e) => setEntryCustomerPhone(maskPhone(e.target.value))} className="p-2 border rounded-md dark:bg-slate-700 dark:border-slate-600" /></div>
@@ -1130,7 +1426,7 @@ const Dashboard: React.FC = () => {
                                 const hasServices = mov.services && mov.services.length > 0;
                                 const isMensalista = mov.chargeType === ChargeType.MENSAL;
                                 let rowClass = 'border-b dark:border-slate-700 last:border-b-0 hover:bg-slate-100 dark:hover:bg-slate-700/50 transition-colors cursor-pointer';
-                                if (hasServices) { rowClass += ' bg-amber-100 dark:bg-amber-700/30'; }
+                                if (hasServices) { rowClass += ' bg-orange-300 dark:bg-orange-850/40'; }
                                 else if (isMensalista) { rowClass += ' bg-yellow-100 dark:bg-yellow-900/30'; }
 
                                 return (
@@ -1143,8 +1439,15 @@ const Dashboard: React.FC = () => {
                                         <td className="p-2 text-xs">{mov.services?.map(s => s.name).join(', ') || '---'}</td>
                                         <td className="p-2 text-right">
                                             <div className="flex items-center justify-end space-x-1 text-slate-500">
+                                                {modules?.whatsapp && mov.customerPhone && (
+                                                    <button onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        const msg = `*Aviso*\n\nOla, seu veiculo placa *${mov.plate}* encontra-se no estacionamento.\nEntrada: ${new Date(mov.entryTime).toLocaleString('pt-BR')}`;
+                                                        sendWhatsAppMessage(mov.customerPhone!, msg);
+                                                    }} className="p-1 hover:text-green-600" title="WhatsApp"><ChatIcon /></button>
+                                                )}
                                                 <button onClick={(e) => { e.stopPropagation(); handleEditClick(mov); }} className="p-1 hover:text-blue-600" title="Editar"><PencilIcon /></button>
-                                                <button onClick={(e) => { e.stopPropagation(); printEntryCoupon(mov, couponPrintConfig, printerConfig); }} className="p-1 hover:text-gray-600" title="Reimprimir Cupom"><PrinterIcon /></button>
+                                                <button onClick={(e) => { e.stopPropagation(); printEntryCoupon(mov, couponPrintConfig, printerConfig, modules); }} className="p-1 hover:text-gray-600" title="Reimprimir Cupom"><PrinterIcon /></button>
                                                 <button onClick={(e) => { e.stopPropagation(); setMovementToCancel(mov); }} className="p-1 hover:text-red-600" title="Excluir Entrada"><TrashIcon /></button>
                                             </div>
                                         </td>
@@ -1166,7 +1469,7 @@ const Dashboard: React.FC = () => {
                             <span>Mensalistas: <strong className="text-yellow-600">{parkedMensalistas}</strong></span>
                             <span>Diurnos (Faltam): <strong className="text-orange-500">{mensalistasDiurnosFaltam}</strong></span>
                             <span>Saídas (hoje): <strong className="text-green-600">{totalExitsToday}</strong></span>
-                            <span>Em Serviço: <strong className="text-amber-600">{vehiclesWithServices}</strong></span>
+                            <span>Em Serviço: <strong className="text-orange-700 dark:text-orange-400">{vehiclesWithServices}</strong></span>
                         </div>
                         <button onClick={() => setIsCashClosingModalOpen(true)} className="bg-sky-600 text-white rounded-md py-1 px-3 inline-flex items-center justify-center font-semibold hover:bg-sky-700 transition-colors">
                             Fechamento de Caixa (F12)
@@ -1183,150 +1486,133 @@ const Dashboard: React.FC = () => {
 
 // --- Helper Components for Dashboard ---
 const calculateDetailedPrice = (entryTime: Date, exitTime: Date, config: PricingConfig): { price: number; description: string } => {
-    // Garante que as entradas são objetos Date válidos
     if (!(entryTime instanceof Date) || !(exitTime instanceof Date) || isNaN(entryTime.getTime()) || isNaN(exitTime.getTime())) {
-        console.error("calculateDetailedPrice recebeu datas inválidas.");
-        return { price: config.firstHourRate || 10, description: "Erro de data" };
+        return { price: config.firstHourRate || 0, description: "Erro de data" };
     }
 
-    const entryDate = new Date(entryTime);
-    const exitDate = new Date(exitTime);
+    const durationMillis = exitTime.getTime() - entryTime.getTime();
+    if (durationMillis <= 0) return { price: 0, description: 'Sem permanência' };
+    const totalDurationHours = durationMillis / (1000 * 60 * 60);
 
-    const fallbackToModel = () => {
-        const durationMillis = exitDate.getTime() - entryDate.getTime();
-        if (durationMillis <= 0) return { price: config.firstHourRate, description: '1ª Hora' };
-        const durationHours = durationMillis / (1000 * 60 * 60);
+    // Internal helper for hourly/bands logic
+    const calculateHourlyPart = (hours: number): { price: number; description: string } => {
+        if (hours <= 0) return { price: 0, description: '' };
 
         if (config.chargeModel === 'fixed') {
             return { price: config.fixedRate, description: 'Diária Fixa' };
         }
 
+        let price = 0;
+        let desc = '';
+
         if (config.chargeModel === 'bands' && Array.isArray(config.timeBands) && config.timeBands.length > 0) {
             const bands = [...config.timeBands].sort((a, b) => a.upToHours - b.upToHours);
+            let found = false;
             for (const band of bands) {
-                if (durationHours <= band.upToHours) {
-                    return { price: band.price, description: `Até ${band.upToHours}h` };
+                if (hours <= band.upToHours) {
+                    price = band.price;
+                    desc = `Até ${band.upToHours}h`;
+                    found = true;
+                    break;
                 }
             }
-            const lastBand = bands[bands.length - 1];
-            const additionalHours = Math.ceil(durationHours - lastBand.upToHours);
-            const price = lastBand.price + (additionalHours * (config.afterBandsAdditionalHourRate || config.additionalHourRate));
-            if (config.dailyCapHours && durationHours >= config.dailyCapHours) {
-                return { price: config.fixedRate, description: `Cap ${config.dailyCapHours}h → Diária` };
+            if (!found) {
+                const lastBand = bands[bands.length - 1];
+                const additionalHours = Math.ceil(hours - lastBand.upToHours);
+                price = lastBand.price + (additionalHours * (config.afterBandsAdditionalHourRate || config.additionalHourRate));
+                desc = `Até ${lastBand.upToHours}h + ${additionalHours}h Adic.`;
             }
-            return { price, description: `Até ${lastBand.upToHours}h + ${additionalHours}h adicionais` };
+        } else {
+            // Default hourly model
+            if (hours <= 1) {
+                price = config.firstHourRate;
+                desc = '1ª Hora';
+            } else {
+                const additionalHours = Math.ceil(hours - 1);
+                price = config.firstHourRate + (additionalHours * config.additionalHourRate);
+                desc = `1ª Hora + ${additionalHours}h Adic.`;
+            }
         }
 
-        if (durationHours <= 1) return { price: config.firstHourRate, description: '1ª Hora' };
-        const additionalHours = Math.ceil(durationHours - 1);
-        const price = config.firstHourRate + (additionalHours * config.additionalHourRate);
-        if (config.dailyCapHours && durationHours >= config.dailyCapHours) {
-            return { price: config.fixedRate, description: `Cap ${config.dailyCapHours}h → Diária` };
+        // Apply daily cap if configured
+        if (config.dailyCapHours && hours >= config.dailyCapHours) {
+            return { price: config.fixedRate, description: `Limite ${config.dailyCapHours}h → Diária` };
         }
-        return { price, description: `1ª Hora + ${additionalHours}h Adicionais` };
+
+        return { price, description: desc };
     };
 
-    // Validação robusta da configuração
-    if (!config.enableOvernight || typeof config.diariaStartTime !== 'string' || typeof config.diariaEndTime !== 'string' || !config.diariaStartTime.includes(':') || !config.diariaEndTime.includes(':')) {
-        return fallbackToModel();
+    // If Overnight is NOT enabled, use the flat hourly/bands model
+    if (!config.enableOvernight || !config.diariaStartTime || !config.diariaEndTime) {
+        return calculateHourlyPart(totalDurationHours);
     }
 
     const [startHour, startMinute] = config.diariaStartTime.split(':').map(Number);
     const [endHour, endMinute] = config.diariaEndTime.split(':').map(Number);
 
-    if (isNaN(startHour) || isNaN(startMinute) || isNaN(endHour) || isNaN(endMinute)) {
-        return fallbackToModel();
-    }
+    let current = new Date(entryTime);
+    let totalCost = 0;
+    const descriptions: string[] = [];
 
-    if (exitDate <= entryDate) {
-        const entryDiariaStart = new Date(entryDate); entryDiariaStart.setHours(startHour, startMinute, 0, 0);
-        const entryDiariaEnd = new Date(entryDate); entryDiariaEnd.setHours(endHour, endMinute, 0, 0);
+    while (current < exitTime) {
+        const isCurrentInDiaria = current.getHours() >= startHour && (current.getHours() < endHour || (current.getHours() === endHour && current.getMinutes() < endMinute));
 
-        if (entryDate >= entryDiariaStart && entryDate < entryDiariaEnd) {
-            return { price: config.fixedRate, description: "1 diária" };
+        const periodEnd = new Date(current);
+        if (isCurrentInDiaria) {
+            periodEnd.setHours(endHour, endMinute, 0, 0);
         } else {
-            return { price: config.overnightRate, description: "1 pernoite" };
+            if (current.getHours() >= endHour) periodEnd.setDate(periodEnd.getDate() + 1);
+            periodEnd.setHours(startHour, startMinute, 0, 0);
         }
-    }
 
-    let cost = 0;
-    let diarias = 0;
-    let pernoites = 0;
-    let cursor = new Date(entryDate);
+        const effectiveEnd = exitTime < periodEnd ? exitTime : periodEnd;
+        const periodDurationHours = (effectiveEnd.getTime() - current.getTime()) / (1000 * 60 * 60);
 
-    const getNextEventTime = (time: Date) => {
-        const diariaStartToday = new Date(time); diariaStartToday.setHours(startHour, startMinute, 0, 0);
-        const diariaEndToday = new Date(time); diariaEndToday.setHours(endHour, endMinute, 0, 0);
+        if (isCurrentInDiaria) {
+            // Logic for Daily period: compare hourly cost vs fixed daily rate
+            const hourly = calculateHourlyPart(periodDurationHours);
+            const periodPrice = (config.dailyCapHours && periodDurationHours < config.dailyCapHours)
+                ? hourly.price
+                : Math.min(hourly.price, config.fixedRate);
 
-        if (time < diariaStartToday) return { type: 'diaria', time: diariaStartToday };
-        if (time < diariaEndToday) return { type: 'pernoite', time: diariaEndToday };
-
-        const tomorrowDiariaStart = new Date(time);
-        tomorrowDiariaStart.setDate(time.getDate() + 1);
-        tomorrowDiariaStart.setHours(startHour, startMinute, 0, 0);
-        return { type: 'diaria', time: tomorrowDiariaStart };
-    };
-
-    // Lógica revisada para evitar loops infinitos e cobranças incorretas
-    while (cursor < exitDate) {
-        const isCursorInDiaria = cursor.getHours() >= startHour && (cursor.getHours() < endHour || (cursor.getHours() === endHour && cursor.getMinutes() < endMinute));
-
-        if (isCursorInDiaria) { // Período de diária
-            const endOfDiaria = new Date(cursor);
-            endOfDiaria.setHours(endHour, endMinute, 0, 0);
-
-            if (exitDate <= endOfDiaria) { // Saída ocorre dentro do mesmo período de diária
-                cost += config.fixedRate;
-                diarias++;
-                break; // Fim do cálculo
-            } else { // Veículo ficou toda a diária e entrou no pernoite
-                cost += config.fixedRate;
-                diarias++;
-                cursor = endOfDiaria; // Avança o cursor para o fim do período de diária
+            totalCost += periodPrice;
+            if (periodPrice === config.fixedRate) {
+                descriptions.push("1 Diária");
+            } else {
+                descriptions.push(hourly.description);
             }
-        } else { // Período de pernoite
-            const startOfNextDiaria = new Date(cursor);
-            if (cursor.getHours() >= endHour) { // Pernoite da noite
-                startOfNextDiaria.setDate(startOfNextDiaria.getDate() + 1);
-            }
-            startOfNextDiaria.setHours(startHour, startMinute, 0, 0);
-
-            if (exitDate <= startOfNextDiaria) { // Saída ocorre dentro do mesmo período de pernoite
-                cost += config.overnightRate;
-                pernoites++;
-                break; // Fim do cálculo
-            } else { // Veículo ficou todo o pernoite e entrou na próxima diária
-                cost += config.overnightRate;
-                pernoites++;
-                cursor = startOfNextDiaria; // Avança o cursor para o início da próxima diária
-            }
-        }
-    }
-
-    const descriptionParts = [];
-    if (diarias > 0) descriptionParts.push(`${diarias} diária(s)`);
-    if (pernoites > 0) descriptionParts.push(`${pernoites} pernoite(s)`);
-
-    // Safety net: Se o loop não calculou nada, mas houve permanência, cobra o primeiro período aplicável
-    if (cost === 0 && exitDate > entryDate) {
-        const isEntryInDiaria = entryDate.getHours() >= startHour && (entryDate.getHours() < endHour || (entryDate.getHours() === endHour && entryDate.getMinutes() < endMinute));
-        if (isEntryInDiaria) {
-            cost = config.fixedRate;
-            descriptionParts.push("1 diária");
         } else {
-            cost = config.overnightRate;
-            descriptionParts.push("1 pernoite");
+            // Logic for Overnight period: compare hourly cost vs overnight rate
+            const hourly = calculateHourlyPart(periodDurationHours);
+            const periodPrice = Math.min(hourly.price, config.overnightRate);
+
+            totalCost += periodPrice;
+            if (periodPrice === config.overnightRate) {
+                descriptions.push("1 Pernoite");
+            } else {
+                descriptions.push(hourly.description);
+            }
         }
+
+        current = effectiveEnd;
     }
 
-    return { price: cost, description: descriptionParts.join(' + ') || 'Cálculo de período' };
+    // Simplify description (e.g., "1 Diária + 1 Diária" -> "2 Diárias")
+    const simplifiedDesc = descriptions.reduce((acc: any, d) => {
+        acc[d] = (acc[d] || 0) + 1;
+        return acc;
+    }, {});
+
+    const descString = Object.entries(simplifiedDesc)
+        .map(([msg, count]) => (count as number) > 1 ? `${count}x ${msg}` : msg)
+        .join(' + ');
+
+    return { price: totalCost, description: descString || 'Período' };
 };
 
 
-const printReceipt = async (movement: VehicleMovement, basePrice: number, couponConfig: CouponPrintConfig, printerConfig: PrinterConfig) => {
-    console.log("GENERATING RECEIPT - VERSION CHECK");
+const printReceipt = async (movement: VehicleMovement, basePrice: number, couponConfig: CouponPrintConfig, printerConfig: PrinterConfig, modules?: AppModules) => {
 
-    // Formatar valores monetários para BRL
     if (!movement.exitTime) return;
     const entryTime = new Date(movement.entryTime);
     const exitTime = new Date(movement.exitTime);
@@ -1337,38 +1623,46 @@ const printReceipt = async (movement: VehicleMovement, basePrice: number, coupon
     const services = movement.services || [];
     const servicesPrice = services.reduce((sum, s) => sum + s.price, 0);
 
-    const data: any[] = [
-        { type: 'text', value: '*** VERSAO ATUALIZADA ***', style: { fontWeight: "bold", textAlign: 'center', fontSize: '10px' } },
-        { type: 'text', value: removeAccents(couponConfig.headerMessage || ''), style: { fontWeight: "700", textAlign: 'center', marginBottom: '5px' } },
-        { type: 'text', value: removeAccents('COMPROVANTE DE SAIDA'), style: { textAlign: 'center', fontSize: '14px', margin: '5px 0' } },
-        { type: 'text', value: '-'.repeat(30), style: { textAlign: 'center' } },
+    const data: any[] = [];
+
+    // Header Dinâmico (Split por linhas)
+    const headerLines = (couponConfig.headerMessage || '').split('\n');
+    headerLines.forEach(line => {
+        if (line.trim()) {
+            data.push({ type: 'text', value: removeAccents(line), style: { fontWeight: "700", textAlign: 'center', marginBottom: '2px', fontSize: '10px' } });
+        }
+    });
+
+    data.push(
+        { type: 'text', value: removeAccents('COMPROVANTE DE SAIDA'), style: { textAlign: 'center', fontSize: '12px', margin: '5px 0' } },
+        { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } },
 
         // Dados Principais
-        { type: 'text', value: `Cupom: ${movement.coupon}`, style: { textAlign: 'center', fontSize: '14px', marginBottom: '5px' } },
+        { type: 'text', value: `CUPOM: ${movement.coupon}`, style: { textAlign: 'center', fontSize: '24px', fontWeight: 'bold', marginBottom: '5px' } },
 
-        // Tipo de Cliente - Adicionado ao Cupom Completo
-        { type: 'text', value: removeAccents(`Tipo: ${movement.customerType || 'ROTATIVO'}`), style: { fontSize: "12px", textAlign: 'center' } }
-    ];
+        // Tipo de Cliente
+        { type: 'text', value: removeAccents(`Tipo: ${movement.customerType || 'ROTATIVO'}`), style: { fontSize: "10px", textAlign: 'center' } }
+    );
 
     // Placa Grande
     data.push(
-        { type: 'text', value: '============================', style: { textAlign: 'center', fontSize: '10px' } },
+        { type: 'text', value: '='.repeat(28), style: { textAlign: 'center', fontSize: '10px' } },
         {
             type: 'text',
             value: ` PLACA: ${movement.plate} `,
             style: {
                 fontWeight: "bold",
-                fontSize: "36px",
+                fontSize: "32px",
                 textAlign: 'center',
-                margin: '10px 0'
+                margin: '5px 0'
             }
         },
-        { type: 'text', value: '============================', style: { textAlign: 'center', fontSize: '10px', marginBottom: '5px' } }
+        { type: 'text', value: '='.repeat(28), style: { textAlign: 'center', fontSize: '10px', marginBottom: '5px' } }
     );
 
     // Detalhes em Tabela
     data.push(
-        { type: 'text', value: removeAccents(`${movement.vehicleType} / ${movement.model || ''}`), style: { fontSize: "12px", textAlign: 'center', marginBottom: '10px' } },
+        { type: 'text', value: removeAccents(`${movement.vehicleType} / ${movement.model || ''}`), style: { fontSize: "10px", textAlign: 'center', marginBottom: '10px' } },
         {
             type: 'table', style: { border: 'none' }, tableHeader: [], tableBody: [
                 ['Entrada:', removeAccents(entryTime.toLocaleString('pt-BR'))],
@@ -1377,44 +1671,42 @@ const printReceipt = async (movement: VehicleMovement, basePrice: number, coupon
                 ['Atendente:', removeAccents(movement.operatorExit || movement.operatorEntry || 'Admin')],
             ], tableHeaderStyle: { display: 'none' }, tableBodyStyle: { border: 'none' }, tableCellStyle: { textAlign: 'left', fontSize: '10px' }
         },
-        { type: 'text', value: '-'.repeat(30), style: { textAlign: 'center' } }
+        { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } }
     );
 
     if (couponConfig.showSummary) {
-        data.push({ type: 'text', value: `Estadia: ${basePrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, style: { fontSize: "12px" } });
+        data.push({ type: 'text', value: `Estadia: ${basePrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, style: { fontSize: "10px" } });
 
         services.forEach(s => {
-            data.push({ type: 'text', value: `+ ${removeAccents(s.name)}: ${s.price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, style: { fontSize: "12px" } });
+            data.push({ type: 'text', value: `+ ${removeAccents(s.name)}: ${s.price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, style: { fontSize: "10px" } });
         });
 
         if (services.length > 0) {
-            data.push({ type: 'text', value: `Subtotal: ${(basePrice + servicesPrice).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, style: { fontSize: "12px" } });
+            data.push({ type: 'text', value: `Subtotal: ${(basePrice + servicesPrice).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, style: { fontSize: "10px" } });
         }
 
         if (movement.discount) {
-            data.push({ type: 'text', value: `Desconto: -${movement.discount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, style: { fontSize: "12px" } });
+            data.push({ type: 'text', value: `Desconto: -${movement.discount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, style: { fontSize: "10px" } });
         }
         if (movement.surcharge) {
-            data.push({ type: 'text', value: `Acrescimo: +${movement.surcharge.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, style: { fontSize: "12px" } });
+            data.push({ type: 'text', value: `Acrescimo: +${movement.surcharge.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, style: { fontSize: "10px" } });
         }
 
         data.push({ type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } });
-        data.push({ type: 'text', value: `TOTAL: ${(movement.totalPaid ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, style: { fontWeight: "bold", fontSize: "16px", textAlign: 'right' } });
-        data.push({ type: 'text', value: `Pagamento: ${removeAccents(movement.paymentMethod || 'DINHEIRO')}`, style: { fontSize: "12px", textAlign: 'right' } });
+        data.push({ type: 'text', value: `TOTAL: ${(movement.totalPaid ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, style: { fontWeight: "bold", fontSize: "14px", textAlign: 'right' } });
+        data.push({ type: 'text', value: `Pagamento: ${removeAccents(movement.paymentMethod || 'DINHEIRO')}`, style: { fontSize: "10px", textAlign: 'right' } });
         if (movement.customerCpfOnReceipt) {
-            data.push({ type: 'text', value: `CPF: ${movement.customerCpfOnReceipt}`, style: { fontSize: "12px", textAlign: 'right' } });
+            data.push({ type: 'text', value: `CPF: ${movement.customerCpfOnReceipt}`, style: { fontSize: "10px", textAlign: 'right' } });
         }
         data.push({ type: 'text', value: '-'.repeat(28), style: { textAlign: 'center', marginBottom: '10px' } });
     }
 
-    // Footer
-    const footerLines = (couponConfig.footerMessage || 'VOLTE SEMPRE!!!').split('!!!');
-    const footerMsg = footerLines.length > 1 ? footerLines[0] + '!!!\n' + footerLines.slice(1).join('!!!') : (couponConfig.footerMessage || 'VOLTE SEMPRE!!!');
-
-    data.push({
-        type: 'text',
-        value: '\n' + removeAccents(footerMsg),
-        style: { textAlign: 'center', marginTop: '10px', fontSize: '10px', fontWeight: 'bold' }
+    // Footer Dinâmico (Split por linhas)
+    const footerLines = (couponConfig.footerMessage || '').split('\n');
+    footerLines.forEach(line => {
+        if (line.trim()) {
+            data.push({ type: 'text', value: removeAccents(line), style: { textAlign: 'center', marginTop: '2px', fontSize: '10px' } });
+        }
     });
 
     if (couponConfig.printCouponNumberInFooter) {
@@ -1422,14 +1714,19 @@ const printReceipt = async (movement: VehicleMovement, basePrice: number, coupon
     }
 
     if (couponConfig.printBarcode) {
-        data.push({ type: 'barCode', value: movement.coupon, height: 40, width: 2, displayValue: true, fontsize: 12, position: 'center' });
+        data.push({ type: 'barCode', value: movement.coupon, height: 40, width: 2, displayValue: true, fontsize: 10, position: 'center' });
     }
 
-    // Feed e Comando de Corte - Aumentado para garantir corte automático
-    data.push(
-        { type: 'text', value: '\n\n\n\n\n\n\n\n\n\n', style: { fontSize: '1px' } }
-    );
+    // QR Code para Totem/Cancelas
+    if (modules?.barriers) {
+        // O valor do QR pode ser apenas o cupom ou um JSON/String específico dependendo do hardware. 
+        // Assumindo envio do número do cupom.
+        data.push({ type: 'text', value: ' ', style: { fontSize: '5px' } }); // Spacer
+        data.push({ type: 'qrCode', value: movement.coupon, height: 100, width: 100, position: 'center' });
+        data.push({ type: 'text', value: 'Aproxime o QR Code do leitor', style: { textAlign: 'center', fontSize: '10px' } });
+    }
 
+    pushPaperFeed(data, 6);
 
     if (window.electronAPI && window.electronAPI.printData) {
         await window.electronAPI.printData(data, printerConfig.printerName, printerConfig.printWidth);
@@ -1438,7 +1735,7 @@ const printReceipt = async (movement: VehicleMovement, basePrice: number, coupon
     }
 };
 
-const printSimpleExitCoupon = async (movement: VehicleMovement, couponConfig: CouponPrintConfig, printerConfig: PrinterConfig) => {
+const printSimpleExitCoupon = async (movement: VehicleMovement, couponConfig: CouponPrintConfig, printerConfig: PrinterConfig, modules?: AppModules) => {
     if (!movement.exitTime) return;
     const entryTime = new Date(movement.entryTime);
     const exitTime = new Date(movement.exitTime);
@@ -1448,134 +1745,187 @@ const printSimpleExitCoupon = async (movement: VehicleMovement, couponConfig: Co
     const minutes = Math.floor((durationMillis % (1000 * 60 * 60)) / (1000 * 60));
     const durationStr = `${hours}h ${minutes}m`;
 
-    const data: any[] = [
-        { type: 'text', value: removeAccents(couponConfig.headerMessage || ''), style: { fontWeight: "700", textAlign: 'center', marginBottom: '5px' } },
-        { type: 'text', value: removeAccents('COMPROVANTE DE SAIDA'), style: { textAlign: 'center', fontSize: '14px', margin: '10px 0' } },
-        { type: 'text', value: '-'.repeat(32), style: { textAlign: 'center' } },
+    const data: any[] = [];
+
+    // Header Dinâmico (Split por linhas)
+    const headerLines = (couponConfig.headerMessage || '').split('\n');
+    headerLines.forEach(line => {
+        if (line.trim()) {
+            data.push({ type: 'text', value: removeAccents(line), style: { fontWeight: "700", textAlign: 'center', marginBottom: '2px', fontSize: '10px' } });
+        }
+    });
+
+    data.push(
+        { type: 'text', value: removeAccents('COMPROVANTE DE SAIDA'), style: { textAlign: 'center', fontSize: '12px', margin: '10px 0' } },
+        { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } },
 
         // Número do Cupom (Destacado)
-        { type: 'text', value: `CUPOM: ${movement.coupon}`, style: { textAlign: 'center', fontSize: '16px', fontWeight: 'bold', margin: '5px 0' } }
-    ];
+        { type: 'text', value: `CUPOM: ${movement.coupon}`, style: { textAlign: 'center', fontSize: '24px', fontWeight: 'bold', margin: '5px 0' } }
+    );
 
     // Adiciona Tipo de Cliente e Nome
     data.push(
-        { type: 'text', value: removeAccents(`Tipo: ${movement.customerType || 'ROTATIVO'}`), style: { fontSize: "14px", textAlign: 'center', fontWeight: 'bold' } }
+        { type: 'text', value: removeAccents(`Tipo: ${movement.customerType || 'ROTATIVO'}`), style: { fontSize: "12px", textAlign: 'center', fontWeight: 'bold' } }
     );
     if (movement.customerName && movement.customerName !== 'AVULSO') {
-        data.push({ type: 'text', value: removeAccents(`Cliente: ${movement.customerName}`), style: { fontSize: "12px", textAlign: 'center' } });
+        data.push({ type: 'text', value: removeAccents(`Cliente: ${movement.customerName}`), style: { fontSize: "10px", textAlign: 'center' } });
     }
 
     // Placa
-    data.push({ type: 'text', value: '============================', style: { textAlign: 'center', fontSize: '10px' } });
+    data.push({ type: 'text', value: '='.repeat(28), style: { textAlign: 'center', fontSize: '8px' } });
     data.push({
         type: 'text',
         value: ` PLACA: ${movement.plate} `,
         style: {
-            fontSize: "36px",
+            fontSize: "32px",
             textAlign: 'center',
             fontWeight: 'bold',
-            margin: '10px 0'
+            margin: '2px 0'
         }
     });
-    data.push({ type: 'text', value: '============================', style: { textAlign: 'center', fontSize: '10px', marginBottom: '5px' } });
+    data.push({ type: 'text', value: '='.repeat(28), style: { textAlign: 'center', fontSize: '8px', marginBottom: '2px' } });
 
     data.push(
-        { type: 'text', value: removeAccents(`Entrada: ${entryTime.toLocaleString('pt-BR')}`), style: { fontSize: "12px" } },
-        { type: 'text', value: removeAccents(`Saida:   ${exitTime.toLocaleString('pt-BR')}`), style: { fontSize: "12px" } },
-        { type: 'text', value: `Tempo:   ${durationStr}`, style: { fontSize: "12px", fontWeight: "bold" } },
-        { type: 'text', value: '-'.repeat(30), style: { textAlign: 'center' } },
+        { type: 'text', value: removeAccents(`Entrada: ${entryTime.toLocaleString('pt-BR')}`), style: { fontSize: "10px" } },
+        { type: 'text', value: removeAccents(`Saida:   ${exitTime.toLocaleString('pt-BR')}`), style: { fontSize: "10px" } },
+        { type: 'text', value: `Tempo:   ${durationStr}`, style: { fontSize: "10px", fontWeight: "bold" } },
+        { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } },
 
         // Detalhes de Pagamento no Cupom Simples
-        { type: 'text', value: `TOTAL: ${(movement.totalPaid ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, style: { fontWeight: "bold", fontSize: "16px", textAlign: 'right', margin: '5px 0' } },
-        { type: 'text', value: removeAccents(`Pagamento: ${movement.paymentMethod || 'DINHEIRO'}`), style: { fontSize: "12px", textAlign: 'right' } },
-        { type: 'text', value: '-'.repeat(30), style: { textAlign: 'center' } }
+        { type: 'text', value: `TOTAL: ${(movement.totalPaid ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, style: { fontWeight: "bold", fontSize: "14px", textAlign: 'right', margin: '5px 0' } },
+        { type: 'text', value: removeAccents(`Pagamento: ${movement.paymentMethod || 'DINHEIRO'}`), style: { fontSize: "10px", textAlign: 'right' } },
+        { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } }
     );
 
-    const footerLines = (couponConfig.footerMessage || '').split('!!!');
-    const footerMsg = footerLines.length > 1 ? footerLines[0] + '!!!\n' + footerLines.slice(1).join('!!!') : (couponConfig.footerMessage || '');
+    // Footer Dinâmico (Split por linhas)
+    const footerLines = (couponConfig.footerMessage || '').split('\n');
+    footerLines.forEach(line => {
+        if (line.trim()) {
+            data.push({ type: 'text', value: removeAccents(line), style: { textAlign: 'center', marginTop: '2px', fontSize: '10px' } });
+        }
+    });
 
-    data.push(
-        { type: 'text', value: removeAccents(footerMsg), style: { textAlign: 'center', marginTop: '10px', fontSize: '10px' } },
+    // Cancelas / Totem na Saída (Talvez para abrir a cancela lendo o comprovante?)
+    if (modules?.barriers) {
+        data.push({ type: 'text', value: ' ', style: { fontSize: '5px' } });
+        data.push({ type: 'qrCode', value: movement.coupon, height: 100, width: 100, position: 'center' });
+    }
 
+    pushPaperFeed(data, 6);
 
-        // Feed e Comando de Corte - Aumentado para garantir corte automático e evitar sobreposição
-        { type: 'text', value: '\n\n\n\n\n\n\n\n\n\n\n\n', style: { fontSize: '1px' } }
-    );
 
     if (window.electronAPI && window.electronAPI.printData) {
         await window.electronAPI.printData(data, printerConfig.printerName, printerConfig.printWidth);
     }
 };
 
-const printEntryCoupon = async (movement: VehicleMovement, couponConfig: CouponPrintConfig, printerConfig: PrinterConfig) => {
+const printEntryCoupon = async (movement: VehicleMovement, couponConfig: CouponPrintConfig, printerConfig: PrinterConfig, modules?: AppModules) => {
     const entryTime = new Date(movement.entryTime);
 
-    const data: any[] = [
-        { type: 'text', value: removeAccents(couponConfig.headerMessage || ''), style: { fontWeight: "700", textAlign: 'center', marginBottom: '5px' } },
-        { type: 'text', value: removeAccents('COMPROVANTE DE ENTRADA'), style: { textAlign: 'center', fontSize: '12px', marginBottom: '5px' } },
-        { type: 'text', value: '-'.repeat(30), style: { textAlign: 'center' } },
+    const data: any[] = [];
 
-        { type: 'text', value: `Cupom: ${movement.coupon}`, style: { textAlign: 'center', fontSize: '14px', marginBottom: '5px' } },
-
-        // Tipo de Cliente e Nome (Se houver)
-        { type: 'text', value: removeAccents(`Tipo: ${movement.customerType || 'ROTATIVO'}`), style: { fontSize: "12px", textAlign: 'center', fontWeight: 'bold' } },
-        ...(movement.customerName && movement.customerName !== 'AVULSO' ? [{ type: 'text', value: removeAccents(`Cliente: ${movement.customerName}`), style: { fontSize: "12px", textAlign: 'center' } }] : []),
-
-        // Placa
-        { type: 'text', value: '============================', style: { textAlign: 'center', fontSize: '10px' } },
-        { type: 'text', value: ` PLACA: ${movement.plate} `, style: { fontWeight: "bold", fontSize: "36px", textAlign: 'center', margin: '10px 0' } },
-        { type: 'text', value: '============================', style: { textAlign: 'center', fontSize: '10px', marginBottom: '5px' } },
-
-        // Categoria e Modelo
-        { type: 'text', value: removeAccents(`Cat: ${movement.vehicleType.toUpperCase()} / ${movement.model?.toUpperCase() || ''}`), style: { fontSize: "12px", textAlign: 'center', marginBottom: '5px' } },
-
-        // Data e Hora de Entrada (Detalhada)
-        { type: 'text', value: `Entrada: ${entryTime.toLocaleDateString('pt-BR')}  Hora: ${entryTime.toLocaleTimeString('pt-BR')}`, style: { fontSize: "14px", textAlign: 'center', fontWeight: 'bold', margin: '5px 0' } },
-
-        { type: 'text', value: '-'.repeat(30), style: { textAlign: 'center' } },
-        { type: 'text', value: '\n' + removeAccents(couponConfig.footerMessage || ''), style: { textAlign: 'center', marginTop: '5px', fontSize: '10px' } }
-    ];
-
-    if (couponConfig.printBarcode) {
-        data.push({ type: 'barCode', value: movement.coupon, height: 40, width: 2, displayValue: true, fontsize: 12, position: 'center' });
-    }
-
-    // Feed e Comando de Corte - Aumentado para garantir corte automático
-    data.push(
-        { type: 'text', value: '\n\n\n\n\n\n\n\n\n\n', style: { fontSize: '1px' } }
-    );
-
-    if (window.electronAPI && window.electronAPI.printData) {
-        await window.electronAPI.printData(data, printerConfig.printerName, printerConfig.printWidth);
-    }
-};
-
-const printCashClosingReport = async (summary: { totalsByPaymentMethod: { [key: string]: number }, grandTotal: number, totalExits: number }, couponConfig: CouponPrintConfig, printerConfig: PrinterConfig) => {
-    const reportDate = new Date().toLocaleString('pt-BR');
-
-    const data: any[] = [
-        { type: 'text', value: removeAccents(couponConfig.headerMessage || ''), style: { fontWeight: "700", textAlign: 'center', marginBottom: '5px' } },
-        { type: 'text', value: removeAccents('Fechamento de Caixa'), style: { textAlign: 'center', fontSize: '16px', fontWeight: 'bold' } },
-        { type: 'text', value: removeAccents(`Data: ${reportDate}`), style: { textAlign: 'center', fontSize: '12px', marginBottom: '10px' } },
-        { type: 'text', value: '-'.repeat(30), style: { textAlign: 'center' } },
-        { type: 'text', value: removeAccents(`Total Saidas: ${summary.totalExits}`), style: { fontSize: "14px" } },
-        { type: 'text', value: '-'.repeat(30), style: { textAlign: 'center' } },
-        { type: 'text', value: removeAccents('Resumo de Pagamentos:'), style: { fontSize: "14px", fontWeight: 'bold', marginBottom: '5px' } }
-    ];
-
-    Object.entries(summary.totalsByPaymentMethod).forEach(([method, total]) => {
-        data.push({ type: 'text', value: removeAccents(`${method}: ${total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`), style: { fontSize: "12px" } });
+    // Header Dinâmico (Split por linhas)
+    const headerLines = (couponConfig.headerMessage || '').split('\n');
+    headerLines.forEach(line => {
+        if (line.trim()) {
+            data.push({ type: 'text', value: removeAccents(line), style: { fontWeight: "700", textAlign: 'center', marginBottom: '2px', fontSize: '10px' } });
+        }
     });
 
     data.push(
-        { type: 'text', value: '-'.repeat(30), style: { textAlign: 'center' } },
-        { type: 'text', value: `TOTAL GERAL: ${summary.grandTotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`, style: { fontSize: "16px", fontWeight: 'bold', textAlign: 'right' } },
-        { type: 'text', value: '-'.repeat(30), style: { textAlign: 'center' } },
-        { type: 'text', value: removeAccents(couponConfig.footerMessage || ''), style: { textAlign: 'center', marginTop: '10px', fontSize: '10px' } },
+        { type: 'text', value: removeAccents('COMPROVANTE DE ENTRADA'), style: { textAlign: 'center', fontSize: '12px', fontWeight: 'bold', marginBottom: '5px' } },
+        { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } },
 
-        // Feed e Comando de Corte - Aumentado para garantir corte automático
-        { type: 'text', value: '\n\n\n\n\n\n\n\n', style: { fontSize: '1px' } }
+        { type: 'text', value: `CUPOM: ${movement.coupon}`, style: { textAlign: 'center', fontSize: '24px', fontWeight: 'bold', marginBottom: '5px' } },
+
+        // Tipo de Cliente e Nome (Se houver)
+        { type: 'text', value: removeAccents(`Tipo: ${movement.customerType || 'ROTATIVO'}`), style: { fontSize: "10px", textAlign: 'center', fontWeight: 'bold' } },
+        ...(movement.customerName && movement.customerName !== 'AVULSO' ? [{ type: 'text', value: removeAccents(`Cliente: ${movement.customerName}`), style: { fontSize: "10px", textAlign: 'center' } }] : []),
+
+        // Placa
+        { type: 'text', value: '='.repeat(28), style: { textAlign: 'center', fontSize: '8px' } },
+        { type: 'text', value: ` PLACA: ${movement.plate} `, style: { fontWeight: "bold", fontSize: "32px", textAlign: 'center', margin: '2px 0' } },
+        { type: 'text', value: '='.repeat(28), style: { textAlign: 'center', fontSize: '8px', marginBottom: '2px' } },
+
+        // Categoria e Modelo
+        { type: 'text', value: removeAccents(`Cat: ${movement.vehicleType.toUpperCase()} / ${movement.model?.toUpperCase() || ''}`), style: { fontSize: "10px", textAlign: 'center', marginBottom: '5px' } },
+
+        // Data e Hora de Entrada (Detalhada)
+        { type: 'text', value: `Entrada: ${entryTime.toLocaleDateString('pt-BR')}  Hora: ${entryTime.toLocaleTimeString('pt-BR')}`, style: { fontSize: "12px", textAlign: 'center', fontWeight: 'bold', margin: '5px 0' } },
+
+        { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } }
     );
+
+    if (couponConfig.printBarcode) {
+        data.push({ type: 'barCode', value: movement.coupon, height: 40, width: 2, displayValue: true, fontsize: 10, position: 'center' });
+    }
+
+    // QR Code para Totem/Cancelas
+    if (modules?.barriers) {
+        data.push({ type: 'text', value: ' ', style: { fontSize: '5px' } });
+        data.push({ type: 'qrCode', value: movement.coupon, height: 100, width: 100, position: 'center' });
+        data.push({ type: 'text', value: 'Aproxime o QR Code do leitor', style: { textAlign: 'center', fontSize: '10px' } });
+    }
+
+    // Footer Dinâmico (Split por linhas)
+    const footerLines = (couponConfig.footerMessage || '').split('\n');
+    footerLines.forEach(line => {
+        if (line.trim()) {
+            data.push({ type: 'text', value: removeAccents(line), style: { textAlign: 'center', marginTop: '2px', fontSize: '10px' } });
+        }
+    });
+
+    pushPaperFeed(data, 6);
+
+    if (window.electronAPI && window.electronAPI.printData) {
+        await window.electronAPI.printData(data, printerConfig.printerName, printerConfig.printWidth);
+    }
+};
+
+const printCashClosingReport = async (summary: { totalsByPaymentMethod: { [key: string]: number }, grandTotal: number, totalExits: number, totalEntries: number, currentlyParked: number }, couponConfig: CouponPrintConfig, printerConfig: PrinterConfig) => {
+    const reportDate = new Date().toLocaleString('pt-BR');
+
+    const data: any[] = [];
+
+    // Header Dinâmico (Split por linhas)
+    const headerLines = (couponConfig.headerMessage || '').split('\n');
+    headerLines.forEach(line => {
+        if (line.trim()) {
+            data.push({ type: 'text', value: removeAccents(line), style: { fontWeight: "700", textAlign: 'center', marginBottom: '2px', fontSize: '10px' } });
+        }
+    });
+
+    data.push(
+        { type: 'text', value: removeAccents('Fechamento de Caixa'), style: { textAlign: 'center', fontSize: '12px', fontWeight: 'bold' } },
+        { type: 'text', value: removeAccents(`Data: ${reportDate}`), style: { textAlign: 'center', fontSize: '10px', marginBottom: '5px' } },
+        { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } },
+        { type: 'text', value: removeAccents(`Entradas Hoje: ${summary.totalEntries}`), style: { fontSize: "10px" } },
+        { type: 'text', value: removeAccents(`Saidas Hoje:   ${summary.totalExits}`), style: { fontSize: "10px" } },
+        { type: 'text', value: removeAccents(`No Patio:      ${summary.currentlyParked}`), style: { fontSize: "10px" } },
+        { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } },
+        { type: 'text', value: removeAccents('Resumo de Pagamentos:'), style: { fontSize: "10px", fontWeight: 'bold', marginBottom: '2px' } }
+    );
+
+    Object.entries(summary.totalsByPaymentMethod).forEach(([method, total]) => {
+        const totalFormatted = `R$ ${(total as number).toFixed(2).replace('.', ',')}`;
+        data.push({ type: 'text', value: removeAccents(`${method}: ${totalFormatted}`), style: { fontSize: "10px" } });
+    });
+
+    data.push(
+        { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } },
+        { type: 'text', value: `TOTAL GERAL: R$ ${summary.grandTotal.toFixed(2).replace('.', ',')}`, style: { fontSize: "12px", fontWeight: 'bold', textAlign: 'right' } },
+        { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } }
+    );
+
+    // Footer Dinâmico (Split por linhas)
+    const footerLines = (couponConfig.footerMessage || '').split('\n');
+    footerLines.forEach(line => {
+        if (line.trim()) {
+            data.push({ type: 'text', value: removeAccents(line), style: { textAlign: 'center', marginTop: '2px', fontSize: '10px' } });
+        }
+    });
+
+    pushPaperFeed(data, 18);
 
     if (window.electronAPI && window.electronAPI.printData) {
         await window.electronAPI.printData(data, printerConfig.printerName, printerConfig.printWidth);
@@ -1583,15 +1933,44 @@ const printCashClosingReport = async (summary: { totalsByPaymentMethod: { [key: 
 };
 
 const PrintOptionsModal: React.FC<{ isOpen: boolean; onClose: () => void; movement: VehicleMovement | null; }> = ({ isOpen, onClose, movement }) => {
-    const { pricingConfig, couponPrintConfig, printerConfig } = useData();
+    const { pricingConfig, couponPrintConfig, printerConfig, modules } = useData();
     if (!isOpen || !movement) return null;
-    const handlePrintReceipt = () => { if (!movement.exitTime) return; const { price: basePrice } = calculateDetailedPrice(movement.entryTime, movement.exitTime, pricingConfig); printReceipt(movement, basePrice, couponPrintConfig, printerConfig); onClose(); };
-    const handlePrintCoupon = () => { printSimpleExitCoupon(movement, couponPrintConfig, printerConfig); onClose(); };
+    const handlePrintReceipt = () => { if (!movement.exitTime) return; const { price: basePrice } = calculateDetailedPrice(movement.entryTime, movement.exitTime, pricingConfig); printReceipt(movement, basePrice, couponPrintConfig, printerConfig, modules); onClose(); };
+    const handlePrintCoupon = () => { printSimpleExitCoupon(movement, couponPrintConfig, printerConfig, modules); onClose(); };
+
+    // WhatsApp Helper
+    const handleSendWhastApp = () => {
+        if (!movement.customerPhone) {
+            alert('Este movimento não possui um telefone vinculado.');
+            return;
+        }
+
+        let msg = `*Comprovante de Estacionamento*\n\n`;
+        msg += `Placa: *${movement.plate}*\n`;
+        msg += `Entrada: ${new Date(movement.entryTime).toLocaleString('pt-BR')}\n`;
+        msg += `Saida: ${new Date().toLocaleString('pt-BR')}\n`;
+        msg += `Valor Total: ${(movement.totalPaid ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}\n`;
+        msg += `\nObrigado pela preferencia!`;
+
+        sendWhatsAppMessage(movement.customerPhone, msg);
+    };
+
     return (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
             <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 w-full max-w-md space-y-4" onClick={e => e.stopPropagation()}>
                 <h3 className="text-lg font-bold text-slate-700 dark:text-slate-200">Impressão</h3><p>Pagamento registrado com sucesso. O que você deseja fazer?</p>
-                <div className="flex flex-col space-y-3 pt-4"><button onClick={handlePrintReceipt} className="py-3 px-4 w-full bg-blue-600 text-white font-semibold rounded hover:bg-blue-700">Imprimir Comprovante (Nota)</button><button onClick={handlePrintCoupon} className="py-3 px-4 w-full bg-slate-600 text-white font-semibold rounded hover:bg-slate-700">Imprimir Cupom Simples</button><button onClick={onClose} className="py-3 px-4 w-full bg-slate-200 dark:bg-slate-500 font-semibold rounded hover:bg-slate-300">Não Imprimir</button></div>
+                <div className="flex flex-col space-y-3 pt-4">
+                    <button onClick={handlePrintReceipt} className="py-3 px-4 w-full bg-blue-600 text-white font-semibold rounded hover:bg-blue-700">Imprimir Comprovante (Nota)</button>
+                    <button onClick={handlePrintCoupon} className="py-3 px-4 w-full bg-slate-600 text-white font-semibold rounded hover:bg-slate-700">Imprimir Cupom Simples</button>
+
+                    {modules?.whatsapp && movement.customerPhone && (
+                        <button onClick={handleSendWhastApp} className="py-3 px-4 w-full bg-green-600 text-white font-semibold rounded hover:bg-green-700 flex items-center justify-center gap-2">
+                            <ChatIcon /> Enviar Comprovante no WhatsApp
+                        </button>
+                    )}
+
+                    <button onClick={onClose} className="py-3 px-4 w-full bg-slate-200 dark:bg-slate-500 font-semibold rounded hover:bg-slate-300">Não Imprimir</button>
+                </div>
             </div>
         </div>
     );
@@ -1599,28 +1978,50 @@ const PrintOptionsModal: React.FC<{ isOpen: boolean; onClose: () => void; moveme
 const CashClosingModal: React.FC<{ isOpen: boolean, onClose: () => void }> = ({ isOpen, onClose }) => {
     const { movements, couponPrintConfig, printerConfig } = useData();
 
-    const summary = useMemo(() => {
-        if (!isOpen) return { totalsByPaymentMethod: {}, grandTotal: 0, totalExits: 0 };
+    type CashClosingSummary = {
+        totalsByPaymentMethod: Record<string, number>;
+        grandTotal: number;
+        totalExits: number;
+        totalEntries: number;
+        currentlyParked: number;
+    };
+
+    const summary = useMemo<CashClosingSummary>(() => {
+        if (!isOpen) return { totalsByPaymentMethod: {}, grandTotal: 0, totalExits: 0, totalEntries: 0, currentlyParked: 0 };
 
         const todayString = toLocalISOString(new Date());
-        const movementsToday = movements.filter(m =>
+
+        const movementsTodayExits = movements.filter(m =>
             m.status === 'completed' &&
             m.exitTime &&
             toLocalISOString(new Date(m.exitTime)) === todayString
         );
 
+        const movementsTodayEntries = movements.filter(m =>
+            toLocalISOString(new Date(m.entryTime)) === todayString
+        );
+
+        const currentlyParked = movements.filter(m => m.status === 'parked').length;
+
         const totalsByPaymentMethod: { [key: string]: number } = {};
         let grandTotal = 0;
-        let paidExits = 0;
+        let paidExitsCount = 0;
 
-        movementsToday.forEach(m => {
-            if (m.paymentMethod && m.totalPaid && m.totalPaid > 0) {
-                totalsByPaymentMethod[m.paymentMethod] = (totalsByPaymentMethod[m.paymentMethod] || 0) + m.totalPaid;
-                grandTotal += m.totalPaid;
-                paidExits++;
+        movementsTodayExits.forEach(m => {
+            const paid = typeof m.totalPaid === 'number' ? m.totalPaid : Number(m.totalPaid);
+            if (m.paymentMethod && Number.isFinite(paid) && paid > 0) {
+                totalsByPaymentMethod[m.paymentMethod] = (totalsByPaymentMethod[m.paymentMethod] || 0) + paid;
+                grandTotal += paid;
+                paidExitsCount++;
             }
         });
-        return { totalsByPaymentMethod, grandTotal, totalExits: paidExits };
+        return {
+            totalsByPaymentMethod,
+            grandTotal,
+            totalExits: paidExitsCount,
+            totalEntries: movementsTodayEntries.length,
+            currentlyParked
+        };
     }, [movements, isOpen]);
 
     if (!isOpen) return null;
@@ -1640,7 +2041,7 @@ const CashClosingModal: React.FC<{ isOpen: boolean, onClose: () => void }> = ({ 
                             Object.entries(summary.totalsByPaymentMethod).map(([method, total]) => (
                                 <div key={method} className="flex justify-between items-center text-lg">
                                     <span className="font-medium text-slate-600 dark:text-slate-300">{method}:</span>
-                                    <span className="font-semibold font-mono">{total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                                    <span className="font-semibold font-mono">{Number(total).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
                                 </div>
                             ))
                         ) : (
@@ -1651,12 +2052,22 @@ const CashClosingModal: React.FC<{ isOpen: boolean, onClose: () => void }> = ({ 
 
                 <div className="border-t dark:border-slate-700 pt-4 mt-4 space-y-2">
                     <div className="flex justify-between items-center text-sm">
-                        <span className="text-slate-500">Total de Saídas Pagas:</span>
+                        <span className="text-slate-500">Entradas Hoje:</span>
+                        <span className="font-semibold">{summary.totalEntries}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-sm">
+                        <span className="text-slate-500">Saídas Hoje:</span>
                         <span className="font-semibold">{summary.totalExits}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-sm">
+                        <span className="text-slate-500">Atualmente no Pátio:</span>
+                        <span className="font-semibold">{summary.currentlyParked}</span>
                     </div>
                     <div className="flex justify-between items-center text-xl">
                         <span className="font-bold text-slate-700 dark:text-slate-100">TOTAL GERAL:</span>
-                        <span className="font-bold text-green-600 dark:text-green-400">{summary.grandTotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                        <span className="font-bold text-green-600 dark:text-green-400">
+                            R$ {summary.grandTotal.toFixed(2).replace('.', ',')}
+                        </span>
                     </div>
                 </div>
 
@@ -1693,11 +2104,13 @@ const CancellationModal: React.FC<{ isOpen: boolean; onClose: () => void; onConf
     );
 };
 const RegisterMonthlyPaymentModal: React.FC<{ isOpen: boolean, onClose: () => void }> = ({ isOpen, onClose }) => {
-    const { customers, setCustomers, setMonthlyPaymentLogs } = useData();
+    const { customers, setCustomers, setMonthlyPaymentLogs, paymentMethods } = useData();
     const { loggedInUser } = useAuth();
+    const defaultPaymentMethod = paymentMethods.find(p => p.isDefault)?.name || paymentMethods[0]?.name || 'DINHEIRO';
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
     const [paymentAmount, setPaymentAmount] = useState<number | string>('');
+    const [paymentMethod, setPaymentMethod] = useState(defaultPaymentMethod);
     const monthlyCustomers = useMemo(() => customers.filter(c => c.isMensalista), [customers]);
     const searchResults = useMemo(() => { if (!searchTerm) return []; const lowerCaseSearchTerm = searchTerm.toLowerCase(); return monthlyCustomers.filter(c => (c.name || '').toLowerCase().includes(lowerCaseSearchTerm) || (c.plate || '').toLowerCase().includes(lowerCaseSearchTerm)).slice(0, 5); }, [searchTerm, monthlyCustomers]);
     const handleRegisterPayment = () => {
@@ -1712,28 +2125,106 @@ const RegisterMonthlyPaymentModal: React.FC<{ isOpen: boolean, onClose: () => vo
             paymentDate: new Date(),
             amountPaid: finalAmount,
             operator: loggedInUser!.name,
+            paymentMethod: paymentMethod,
         };
         setMonthlyPaymentLogs(prev => [...prev, newLog]);
 
         setCustomers(prev => prev.map(c => c.id === selectedCustomer.id ? { ...c, lastPayment: new Date().toISOString().split('T')[0] } : c));
-        alert(`Pagamento de ${finalAmount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} para ${selectedCustomer.name} registrado com sucesso!`);
+        alert(`Pagamento de ${finalAmount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} para ${selectedCustomer.name} via ${paymentMethod} registrado com sucesso!`);
         setSelectedCustomer(null); setSearchTerm(''); onClose();
     };
-    useEffect(() => { if (!isOpen) { setSearchTerm(''); setSelectedCustomer(null); setPaymentAmount(''); } }, [isOpen]);
+    useEffect(() => { if (!isOpen) { setSearchTerm(''); setSelectedCustomer(null); setPaymentAmount(''); setPaymentMethod(defaultPaymentMethod); } }, [isOpen, defaultPaymentMethod]);
     useEffect(() => { if (selectedCustomer) { setPaymentAmount(selectedCustomer.monthlyFee || ''); } }, [selectedCustomer]);
     if (!isOpen) return null;
     return (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50" onClick={onClose}>
             <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 w-full max-w-lg space-y-4" onClick={e => e.stopPropagation()}>
                 <div className="flex justify-between items-start"><h2 className="text-xl font-bold">Registrar Pagamento de Mensalista</h2><button onClick={onClose} className="text-3xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">&times;</button></div>
-                {!selectedCustomer ? (<div><label className="block text-sm font-medium mb-1">Buscar por Nome ou Placa</label><input type="text" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Digite para buscar..." className="w-full p-2 border rounded dark:bg-slate-700 dark:border-slate-600" />{searchResults.length > 0 && (<ul className="border dark:border-slate-600 rounded mt-2 max-h-48 overflow-y-auto">{searchResults.map(c => (<li key={c.id} onClick={() => { setSelectedCustomer(c); setSearchTerm(''); }} className="p-2 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700">{c.name} - {c.plate}</li>))}</ul>)}</div>) : (<div className="bg-slate-100 dark:bg-slate-700/50 p-4 rounded-lg space-y-4"><div><p><span className="font-semibold">Cliente:</span> {selectedCustomer.name}</p><p><span className="font-semibold">Último Pagamento:</span> {selectedCustomer.lastPayment ? new Date(selectedCustomer.lastPayment).toLocaleDateString('pt-BR') : 'Nenhum'}</p></div><div><label htmlFor="paymentAmount" className="block text-sm font-medium mb-1">Valor a Pagar (R$)</label><input id="paymentAmount" type="number" value={paymentAmount} onChange={e => setPaymentAmount(e.target.value)} className="w-full p-2 border rounded dark:bg-slate-700 dark:border-slate-600" step="0.01" placeholder="0,00" /><p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Edite o valor para incluir serviços extras ou pagamentos parciais.</p></div><p className="pt-2 text-sm text-blue-600 dark:text-blue-400">Confirmar pagamento para a data de hoje: <strong>{new Date().toLocaleDateString('pt-BR')}</strong>?</p></div>)}
+                {!selectedCustomer ? (<div><label className="block text-sm font-medium mb-1">Buscar por Nome ou Placa</label><input type="text" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Digite para buscar..." className="w-full p-2 border rounded dark:bg-slate-700 dark:border-slate-600" />{searchResults.length > 0 && (<ul className="border dark:border-slate-600 rounded mt-2 max-h-48 overflow-y-auto">{searchResults.map(c => (<li key={c.id} onClick={() => { setSelectedCustomer(c); setSearchTerm(''); }} className="p-2 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700">{c.name} - {c.plate}</li>))}</ul>)}</div>) : (<div className="bg-slate-100 dark:bg-slate-700/50 p-4 rounded-lg space-y-4"><div><p><span className="font-semibold">Cliente:</span> {selectedCustomer.name}</p><p><span className="font-semibold">Último Pagamento:</span> {selectedCustomer.lastPayment ? new Date(selectedCustomer.lastPayment).toLocaleDateString('pt-BR') : 'Nenhum'}</p></div>
+                    <div className="grid grid-cols-2 gap-4">
+                        <div><label htmlFor="paymentAmount" className="block text-sm font-medium mb-1">Valor a Pagar (R$)</label><input id="paymentAmount" type="number" value={paymentAmount} onChange={e => setPaymentAmount(e.target.value)} className="w-full p-2 border rounded dark:bg-slate-700 dark:border-slate-600" step="0.01" placeholder="0,00" /></div>
+                        <div><label htmlFor="paymentMethod" className="block text-sm font-medium mb-1">Forma de Pagamento</label><select id="paymentMethod" value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)} className="w-full p-2 border rounded dark:bg-slate-700 dark:border-slate-600">{paymentMethods.map(m => (<option key={m.id} value={m.name}>{m.name}</option>))}</select></div>
+                    </div>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Confirme o valor e a forma de pagamento antes de finalizar.</p><p className="pt-2 text-sm text-blue-600 dark:text-blue-400">Data do pagamento: <strong>{new Date().toLocaleDateString('pt-BR')}</strong>?</p></div>)}
                 <div className="flex justify-end gap-4 pt-4 border-t dark:border-slate-700"><button onClick={onClose} className="py-2 px-6 bg-slate-200 dark:bg-slate-600 font-semibold rounded hover:bg-slate-300">Cancelar</button><button onClick={handleRegisterPayment} disabled={!selectedCustomer} className="py-2 px-6 bg-green-600 text-white font-semibold rounded hover:bg-green-700 disabled:bg-slate-400 disabled:cursor-not-allowed">Confirmar Pagamento</button></div>
             </div>
         </div>
     );
 };
+
+const ConfirmEntryModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfirm: () => void; }> = ({ isOpen, onClose, onConfirm }) => {
+    const [selected, setSelected] = useState<'yes' | 'no'>('yes');
+    const { modules, movements } = useData();
+    // Getting the latest registered movement (assuming it's the first in the list as register logic prepends it)
+    const lastMovement = movements[0];
+
+    useEffect(() => {
+        if (!isOpen) {
+            setSelected('yes');
+            return;
+        }
+
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                setSelected(prev => prev === 'yes' ? 'no' : 'yes');
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                if (selected === 'yes') onConfirm();
+                else onClose();
+            } else if (e.key === 'Escape') {
+                onClose();
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [isOpen, selected, onConfirm, onClose]);
+
+    if (!isOpen) return null;
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-[1001]" style={{ pointerEvents: 'auto' }}>
+            <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 w-full max-w-sm space-y-4" onClick={e => e.stopPropagation()}>
+                <div className="flex justify-between items-center text-blue-600">
+                    <h3 className="text-xl font-bold">Veículo Registrado!</h3>
+                </div>
+                <p className="text-slate-600 dark:text-slate-300">Deseja imprimir o cupom de entrada agora?</p>
+                <div className="flex gap-4 pt-4">
+                    <button
+                        onClick={onClose}
+                        className={`flex-1 py-3 px-4 font-semibold rounded-lg transition-colors ${selected === 'no' ? 'bg-slate-300 dark:bg-slate-500 ring-2 ring-blue-500' : 'bg-slate-200 dark:bg-slate-600 hover:bg-slate-300'}`}
+                    >
+                        Não
+                    </button>
+
+                    {modules?.whatsapp && lastMovement?.customerPhone && (
+                        <button
+                            onClick={() => {
+                                const msg = `*Ticket de Estacionamento*\n\nPlaca: *${lastMovement.plate}*\nEntrada: ${new Date(lastMovement.entryTime).toLocaleString('pt-BR')}\nCupom: ${lastMovement.coupon}`;
+                                sendWhatsAppMessage(lastMovement.customerPhone!, msg);
+                                onClose();
+                            }}
+                            className="py-3 px-4 font-semibold rounded-lg bg-green-600 hover:bg-green-700 text-white flex items-center justify-center"
+                            title="Enviar Ticket via WhatsApp"
+                        >
+                            <ChatIcon />
+                        </button>
+                    )}
+
+                    <button
+                        onClick={onConfirm}
+                        className={`flex-1 py-3 px-4 font-semibold rounded-lg transition-colors ${selected === 'yes' ? 'bg-blue-700 ring-2 ring-blue-300' : 'bg-blue-600 hover:bg-blue-700'} text-white`}
+                    >
+                        Sim, Imprimir
+                    </button>
+                </div>
+                <p className="text-[10px] text-center text-slate-400 mt-2">Use as setas ← → para alternar e ENTER para escolher</p>
+            </div>
+        </div>
+    );
+};
+
 const PaymentModal: React.FC<{ movement: VehicleMovement | null; onClose: () => void; onPaymentSuccess: (movement: VehicleMovement) => void; }> = ({ movement, onClose, onPaymentSuccess }) => {
-    const { setMovements, paymentMethods, pricingConfig, agreements, vehicleCategories } = useData();
+    const { setMovements, paymentMethods, pricingConfig, agreements, vehicleCategories, nfseConfig } = useData();
     const { loggedInUser } = useAuth();
     const defaultPaymentMethod = useMemo(() => paymentMethods.find(p => p.isDefault)?.name || paymentMethods[0]?.name || 'DINHEIRO', [paymentMethods]);
     const [discount, setDiscount] = useState(0); const [surcharge, setSurcharge] = useState(0); const [amountReceived, setAmountReceived] = useState(0); const [paymentMethod, setPaymentMethod] = useState(defaultPaymentMethod); const [customerCpf, setCustomerCpf] = useState('');
@@ -1747,13 +2238,16 @@ const PaymentModal: React.FC<{ movement: VehicleMovement | null; onClose: () => 
 
         const agreement = agreements.find(a => a.associatedPlates.toUpperCase().split(',').map(p => p.trim()).includes(movement.plate.toUpperCase()));
 
-        const { price: calculatedPrice, description: priceDesc } = calculateDetailedPrice(entryTime, exitTime, pricingConfig);
+        const { price: rawCalculatedPrice, description: priceDesc } = calculateDetailedPrice(entryTime, exitTime, pricingConfig);
+
+        // For mensalistas, the parking stays base price is 0, we only charge for services.
+        const basePrice = movement.chargeType === ChargeType.MENSAL ? 0 : rawCalculatedPrice;
 
         let finalAgreementDiscount = 0; let finalAgreementDescription = ''; let finalCategoryDescription = '';
 
         const category = vehicleCategories.find(cat => cat.name === movement.vehicleType) || { id: 'default', name: VehicleType.CARRO };
 
-        let finalPrice = calculatedPrice;
+        let finalPrice = basePrice;
 
         if (agreement && agreement.discountType === 'fixed') {
             finalPrice = agreement.discountValue;
@@ -1778,6 +2272,15 @@ const PaymentModal: React.FC<{ movement: VehicleMovement | null; onClose: () => 
     const handleConfirmPayment = () => {
         const updatedMovement: VehicleMovement = { ...movement, status: 'completed', exitTime: new Date(), totalPaid: totalPayable, discount: discount + agreementDiscountValue, surcharge: surcharge, paymentMethod: paymentMethod, customerCpfOnReceipt: customerCpf, operatorExit: loggedInUser!.name, };
         setMovements(prev => prev.map(m => (m.id === movement.id ? updatedMovement : m))); onPaymentSuccess(updatedMovement); onClose();
+
+        // Trigger NFSE if enabled
+        if (nfseConfig.autoEmit && nfseConfig.cnpj) {
+            if (window.electronAPI && window.electronAPI.emitNfse) {
+                window.electronAPI.emitNfse(updatedMovement, nfseConfig).catch(err => {
+                    console.error("Erro ao disparar emissão de NFSE:", err);
+                });
+            }
+        }
     };
     return (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50" onClick={onClose}>
@@ -1865,8 +2368,8 @@ const EditMovementModal: React.FC<{ movement: VehicleMovement | null; onClose: (
                 <div className="space-y-4">
                     <fieldset className="border dark:border-slate-600 rounded-lg p-4">
                         <legend className="px-2 font-semibold text-sm">Dados Principais</legend>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <input name="plate" value={editableMovement.plate} onChange={handleChange} placeholder="Placa" className="p-2 border rounded dark:bg-slate-700 dark:border-slate-600" />
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            <input name="plate" value={editableMovement.plate} onChange={handleChange} placeholder="Placa" className="p-2 border rounded dark:bg-slate-700 dark:border-slate-600" required />
                             <input name="model" value={editableMovement.model} onChange={handleChange} placeholder="Modelo" className="p-2 border rounded dark:bg-slate-700 dark:border-slate-600" />
                             <input name="customerName" value={editableMovement.customerName || ''} onChange={handleChange} placeholder="Nome do Cliente" className="p-2 border rounded dark:bg-slate-700 dark:border-slate-600" />
                             <input name="customerPhone" value={editableMovement.customerPhone || ''} onChange={handleChange} placeholder="Telefone" className="p-2 border rounded dark:bg-slate-700 dark:border-slate-600" />
@@ -1994,7 +2497,7 @@ const Customers: React.FC = () => {
             c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
             c.plate.toLowerCase().includes(searchTerm.toLowerCase()) ||
             c.cpfCnpj.includes(searchTerm)
-        );
+        ).sort((a, b) => a.name.localeCompare(b.name));
     }, [customers, searchTerm]);
 
     const handleSave = (customer: Omit<Customer, 'id'> & { id?: string }) => {
@@ -2161,6 +2664,13 @@ const CustomerForm: React.FC<{ customer: Customer | null; customers: Customer[];
             value = value.toUpperCase();
         } else if (['name', 'addressStreet', 'addressNeighborhood', 'addressCity', 'addressState'].includes(name)) {
             value = capitalizeFirstLetter(value);
+        } else if (name === 'cpfCnpj') {
+            const numericValue = value.replace(/\D/g, '');
+            if (numericValue.length <= 11) {
+                value = maskCPF(numericValue);
+            } else {
+                value = maskCNPJ(numericValue);
+            }
         }
 
         if (name === 'cpfCnpj') { setDocStatus(null); }
@@ -2218,11 +2728,32 @@ const CustomerForm: React.FC<{ customer: Customer | null; customers: Customer[];
             setIsFetching(true);
             try {
                 const response = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${doc}`);
-                if (!response.ok) { const errorData = await response.json(); throw new Error(errorData.message || 'CNPJ não encontrado.'); }
+                if (!response.ok) {
+                    let errorMsg = 'CNPJ não encontrado.';
+                    try { const errorData = await response.json(); errorMsg = errorData.message || errorMsg; } catch (e) { }
+                    throw new Error(errorMsg);
+                }
                 const data = await response.json();
-                setFormData(prev => ({ ...prev, name: data.razao_social || prev.name, phone: data.ddd_telefone_1 || prev.phone, addressStreet: data.logradouro || prev.addressStreet, addressNumber: data.numero || prev.addressNumber, addressComplement: data.complemento || prev.addressComplement, addressNeighborhood: data.bairro || prev.addressNeighborhood, addressCity: data.municipio || prev.addressCity, addressState: data.uf || prev.addressState, addressZip: data.cep?.replace(/[.-]/g, '') || prev.addressZip, }));
+                setFormData(prev => ({
+                    ...prev,
+                    name: data.razao_social || prev.name,
+                    phone: data.ddd_telefone_1 || prev.phone,
+                    addressStreet: data.logradouro || prev.addressStreet,
+                    addressNumber: data.numero || prev.addressNumber,
+                    addressComplement: data.complemento || prev.addressComplement,
+                    addressNeighborhood: data.bairro || prev.addressNeighborhood,
+                    addressCity: data.municipio || prev.addressCity,
+                    addressState: data.uf || prev.addressState,
+                    addressZip: data.cep?.replace(/[.-]/g, '') || prev.addressZip,
+                }));
                 setDocStatus({ message: 'Dados do CNPJ preenchidos.', type: 'info' });
-            } catch (error: any) { setDocStatus({ message: error.message || 'Erro ao buscar dados do CNPJ.', type: 'error' }); }
+            } catch (error: any) {
+                console.error("Erro na consulta de CNPJ:", error);
+                const message = error.name === 'TypeError' && error.message === 'Failed to fetch'
+                    ? 'Erro de rede ou serviço BrasilAPI offline. Tente novamente em instantes.'
+                    : error.message || 'Erro ao buscar dados do CNPJ.';
+                setDocStatus({ message, type: 'error' });
+            }
             finally { setIsFetching(false); }
         } else { setDocStatus({ message: 'CPF/CNPJ com formato inválido.', type: 'error' }); }
     };
@@ -2362,7 +2893,7 @@ type AccessLogEvent = {
 };
 
 const Reports: React.FC = () => {
-    const { movements, cancellationLogs, monthlyPaymentLogs } = useData();
+    const { movements, cancellationLogs, monthlyPaymentLogs, systemLogs } = useData();
     const [activeReportType, setActiveReportType] = useState<ReportType | null>(null);
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
@@ -2435,7 +2966,46 @@ const Reports: React.FC = () => {
                 combinedLog.push({ id: l.id, time: new Date(l.paymentDate), type: 'Pagto Mensal', details: l.customerName, operator: l.operator, value: l.amountPaid, color: 'teal' });
             });
 
+            // 4. From System Logs
+            systemLogs.filter(l => {
+                const logTime = new Date(l.time);
+                const dateMatch = (!start || !end) || (logTime >= start && logTime <= end);
+                return dateMatch;
+            }).forEach(l => {
+                combinedLog.push({
+                    id: l.id,
+                    time: new Date(l.time),
+                    type: l.type as any,
+                    details: l.type,
+                    operator: l.operator,
+                    value: 'SISTEMA',
+                    color: l.type === 'Login' ? 'blue' : 'red'
+                });
+            });
+
             setDisplayData(combinedLog.sort((a, b) => a.time.getTime() - b.time.getTime()));
+        } else if (activeReportType === 'cash') {
+            // For Cash report, we combine concluded movements and monthly payments
+            const combinedData: any[] = [];
+
+            // Concluded movements within range
+            movements.filter(m => {
+                if (m.status !== 'completed' || !m.exitTime) return false;
+                const exitTime = new Date(m.exitTime);
+                const dateMatch = (!start || !end) || (exitTime >= start && exitTime <= end);
+                const plateMatch = !plateFilter || m.plate.toUpperCase().includes(plateFilter.toUpperCase());
+                return dateMatch && plateMatch;
+            }).forEach(m => combinedData.push({ ...m, _type: 'movement' }));
+
+            // Monthly payments within range
+            monthlyPaymentLogs.filter(l => {
+                const paymentDate = new Date(l.paymentDate);
+                const dateMatch = (!start || !end) || (paymentDate >= start && paymentDate <= end);
+                const customerNameMatch = !plateFilter || l.customerName.toUpperCase().includes(plateFilter.toUpperCase());
+                return dateMatch && (customerNameMatch || !plateFilter);
+            }).forEach(l => combinedData.push({ ...l, _type: 'monthly', totalPaid: l.amountPaid, paymentMethod: 'Mensalidade', exitTime: l.paymentDate }));
+
+            setDisplayData(combinedData.sort((a, b) => new Date(b.exitTime || b.paymentDate).getTime() - new Date(a.exitTime || a.paymentDate).getTime()));
         } else {
             setDisplayData(filteredMovements.sort((a, b) => new Date(b.entryTime).getTime() - new Date(a.entryTime).getTime()));
         }
@@ -2445,7 +3015,19 @@ const Reports: React.FC = () => {
     const cashSummary = useMemo(() => {
         if (activeReportType !== 'cash' || !displayData) { return { dailySummaries: {} as { [key: string]: DailySummary }, periodTotal: { totals: {} as { [key: string]: number }, grandTotal: 0 } }; }
         const daily: { [key: string]: DailySummary } = {}; const period = { totals: {} as { [key: string]: number }, grandTotal: 0 };
-        (displayData as VehicleMovement[]).forEach(m => { if (m.status === 'completed' && m.totalPaid != null && m.paymentMethod && m.exitTime) { const exitDate = new Date(m.exitTime); const dateKey = exitDate.toISOString().split('T')[0]; if (!daily[dateKey]) { daily[dateKey] = { date: exitDate, totals: {}, dayTotal: 0 }; } const paidAmount = Number(m.totalPaid); daily[dateKey].totals[m.paymentMethod] = (daily[dateKey].totals[m.paymentMethod] || 0) + paidAmount; daily[dateKey].dayTotal += paidAmount; period.totals[m.paymentMethod] = (period.totals[m.paymentMethod] || 0) + paidAmount; period.grandTotal += paidAmount; } });
+        (displayData as any[]).forEach(m => {
+            const exitTime = m.exitTime || m.paymentDate;
+            if (m.totalPaid != null && m.paymentMethod && exitTime) {
+                const exitDate = new Date(exitTime);
+                const dateKey = exitDate.toISOString().split('T')[0];
+                if (!daily[dateKey]) { daily[dateKey] = { date: exitDate, totals: {}, dayTotal: 0 }; }
+                const paidAmount = Number(m.totalPaid);
+                daily[dateKey].totals[m.paymentMethod] = (daily[dateKey].totals[m.paymentMethod] || 0) + paidAmount;
+                daily[dateKey].dayTotal += paidAmount;
+                period.totals[m.paymentMethod] = (period.totals[m.paymentMethod] || 0) + paidAmount;
+                period.grandTotal += paidAmount;
+            }
+        });
         return { dailySummaries: daily, periodTotal: period };
     }, [displayData, activeReportType]);
     const movementsTotalValue = useMemo(() => { if (activeReportType !== 'movements' || !displayData) return 0; return displayData.reduce((sum, item) => sum + Number(item.totalPaid || 0), 0); }, [displayData, activeReportType]);
@@ -2494,7 +3076,7 @@ function renderReportContent(activeReportType: any, displayData: any, cashSummar
     switch (activeReportType) {
         case 'movements': return (<table className="w-full text-left"><thead className="bg-slate-50 dark:bg-slate-700/50"><tr><th className="p-3 text-sm font-semibold text-slate-500">Cupom</th><th className="p-3 text-sm font-semibold text-slate-500">Placa</th><th className="p-3 text-sm font-semibold text-slate-500">Entrada</th><th className="p-3 text-sm font-semibold text-slate-500">Saída</th><th className="p-3 text-sm font-semibold text-slate-500">Pagamento</th><th className="p-3 text-sm font-semibold text-slate-500 text-right">Valor Pago</th></tr></thead><tbody className="divide-y dark:divide-slate-700">{displayData.map((item: any) => (<tr key={item.id}><td className="p-3">{item.coupon}</td><td className="p-3 font-mono">{item.plate}</td><td className="p-3">{new Date(item.entryTime).toLocaleString('pt-BR')}</td><td className="p-3">{item.exitTime ? new Date(item.exitTime).toLocaleString('pt-BR') : '---'}</td><td className="p-3">{item.paymentMethod || '---'}</td><td className="p-3 text-right">{typeof item.totalPaid === 'number' ? item.totalPaid.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '---'}</td></tr>))}</tbody></table>);
         case 'cash': const sortedDays = Object.values(cashSummary.dailySummaries).sort((a: any, b: any) => a.date.getTime() - b.date.getTime()); if (sortedDays.length === 0) { return <p className="text-center p-6 text-slate-500">Nenhum pagamento encontrado para os filtros selecionados.</p>; } return (<div className="p-4 space-y-6">{sortedDays.map(({ date, totals, dayTotal }: any) => (<div key={date.toISOString()} className="p-4 border rounded-lg dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50"><h4 className="font-bold text-slate-800 dark:text-slate-200 text-md mb-2">{new Date(date).toLocaleDateString('pt-BR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</h4><table className="w-full text-sm"><tbody>{Object.entries(totals).map(([method, total]) => (<tr key={method}><td className="py-1 pr-2 text-slate-600 dark:text-slate-300">{method}</td><td className="py-1 pl-2 text-right font-mono">{(total as number).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td></tr>))}</tbody><tfoot className="border-t dark:border-slate-600"><tr><td className="pt-2 font-semibold">Total do Dia</td><td className="pt-2 text-right font-semibold font-mono">{dayTotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td></tr></tfoot></table></div>))}<div className="mt-6 pt-4 border-t-2 dark:border-slate-600"><h3 className="font-bold text-lg mb-4">Resumo Total do Período</h3><div className="border rounded-lg dark:border-slate-700 overflow-hidden"><table className="w-full text-left"><thead className="bg-slate-100 dark:bg-slate-700/50"><tr><th className="p-3 text-sm font-semibold text-slate-500">Forma de Pagamento</th><th className="p-3 text-sm font-semibold text-slate-500 text-right">Valor Total</th></tr></thead><tbody className="divide-y dark:divide-slate-700">{Object.entries(cashSummary.periodTotal.totals).map(([method, total]) => (<tr key={method}><td className="p-3 font-medium">{method}</td><td className="p-3 font-mono text-right">{(total as number).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td></tr>))}</tbody><tfoot className="bg-slate-200 dark:bg-slate-900/50"><tr><td className="p-3 font-bold text-lg">TOTAL GERAL</td><td className="p-3 font-bold font-mono text-right text-lg text-green-600 dark:text-green-400">{cashSummary.periodTotal.grandTotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td></tr></tfoot></table></div></div></div>);
-        case 'access': return (<table className="w-full text-left"><thead className="bg-slate-50 dark:bg-slate-700/50"><tr><th className="p-3 text-sm font-semibold text-slate-500">Data/Hora</th><th className="p-3 text-sm font-semibold text-slate-500">Evento</th><th className="p-3 text-sm font-semibold text-slate-500">Detalhes (Placa/Cliente)</th><th className="p-3 text-sm font-semibold text-slate-500">Operador</th><th className="p-3 text-sm font-semibold text-slate-500 text-right">Valor / Motivo</th></tr></thead><tbody className="divide-y dark:divide-slate-700">{displayData.map((item: AccessLogEvent) => { const colors = { blue: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200', green: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200', red: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200', teal: 'bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-200', }; let valueDisplay; if (typeof item.value === 'number') { valueDisplay = item.value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }); } else { valueDisplay = item.value; } return (<tr key={item.id} className="text-sm"><td className="p-3">{(item.time).toLocaleString('pt-BR')}</td><td className="p-3"><span className={`px-2 py-1 text-xs rounded-full font-medium ${colors[item.color]}`}>{item.type}</span></td><td className="p-3 font-mono">{item.details}</td><td className="p-3">{item.operator}</td><td className="p-3 text-right">{valueDisplay}</td></tr>); })}</tbody></table>);
+        case 'access': return (<table className="w-full text-left"><thead className="bg-slate-50 dark:bg-slate-700/50"><tr><th className="p-3 text-sm font-semibold text-slate-500">Data/Hora</th><th className="p-3 text-sm font-semibold text-slate-500">Evento</th><th className="p-3 text-sm font-semibold text-slate-500">Detalhes (Placa/Cliente)</th><th className="p-3 text-sm font-semibold text-slate-500">Operador</th><th className="p-3 text-sm font-semibold text-slate-500 text-right">Valor / Motivo</th></tr></thead><tbody className="divide-y dark:divide-slate-700">{displayData.map((item: AccessLogEvent) => { const colors = { blue: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200', green: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200', red: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200', teal: 'bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-200', gray: 'bg-slate-100 text-slate-800 dark:bg-slate-600 dark:text-slate-200' }; let valueDisplay; if (typeof item.value === 'number') { valueDisplay = item.value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }); } else { valueDisplay = item.value; } return (<tr key={item.id} className="text-sm"><td className="p-3">{(item.time).toLocaleString('pt-BR')}</td><td className="p-3"><span className={`px-2 py-1 text-xs rounded-full font-medium ${colors[item.color] || colors.gray}`}>{item.type}</span></td><td className="p-3 font-mono">{item.details}</td><td className="p-3">{item.operator}</td><td className="p-3 text-right">{valueDisplay}</td></tr>); })}</tbody></table>);
         default: return null;
     }
 }
@@ -2507,7 +3089,7 @@ const Settings: React.FC = () => {
 
 // --- Login (from components/Login.tsx) ---
 const Login: React.FC<{ onLoginSuccess: (employee: Employee) => void; }> = ({ onLoginSuccess }) => {
-    const { employees } = useData();
+    const { employees, setSystemLogs } = useData();
     const [user, setUser] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
@@ -2516,7 +3098,11 @@ const Login: React.FC<{ onLoginSuccess: (employee: Employee) => void; }> = ({ on
         e.preventDefault();
         if (!user || !password) { setError('Por favor, informe o usuário e a senha.'); return; }
         const foundEmployee = employees.find(emp => emp.user === user && emp.password === password);
-        if (foundEmployee && foundEmployee.isActive) { onLoginSuccess(foundEmployee); }
+        if (foundEmployee && foundEmployee.isActive) {
+            const loginEvent: SystemLog = { id: new Date().toISOString(), time: new Date(), type: 'Login', operator: foundEmployee.name };
+            if (setSystemLogs) setSystemLogs(prev => [...(prev || []), loginEvent]);
+            onLoginSuccess(foundEmployee);
+        }
         else { setError('Usuário ou senha inválidos, ou usuário inativo.'); }
     };
 
@@ -2549,6 +3135,36 @@ const Login: React.FC<{ onLoginSuccess: (employee: Employee) => void; }> = ({ on
     );
 };
 
+// --- License Blocked Screen ---
+const LicenseBlockedScreen: React.FC = () => (
+    <div className="fixed inset-0 bg-slate-100 dark:bg-slate-900 z-[9999] flex items-center justify-center p-6 text-center">
+        <div className="bg-white dark:bg-slate-800 p-10 rounded-2xl shadow-2xl max-w-lg border-2 border-red-500">
+            <div className="text-red-500 mb-6 flex justify-center">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-20 h-20">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m0-10.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.75c0 5.592 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.57-.598-3.75h-.152c-3.196 0-6.1-1.248-8.25-3.286Zm0 13.036h.008v.008H12v-.008Z" />
+                </svg>
+            </div>
+            <h1 className="text-3xl font-bold text-slate-800 dark:text-slate-100 mb-4">Acesso Bloqueado</h1>
+            <p className="text-slate-600 dark:text-slate-400 mb-8 leading-relaxed">
+                Detectamos uma irregularidade na licença de uso do FlowEstac ou o pagamento da mensalidade está pendente.
+                Por favor, entre em contato com o administrador do sistema para regularizar sua situação.
+            </p>
+            <div className="space-y-4">
+                <div className="p-4 bg-slate-50 dark:bg-slate-700/50 rounded-lg text-sm">
+                    <p className="font-semibold text-slate-700 dark:text-slate-200">Suporte FlowEstac</p>
+                    <p className="text-blue-600 dark:text-blue-400">contato@flowestac.com.br</p>
+                </div>
+                <button
+                    onClick={() => window.location.reload()}
+                    className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-colors"
+                >
+                    Tentar Novamente
+                </button>
+            </div>
+        </div>
+    </div>
+);
+
 // --- Settings Component implementation (from components/Settings.tsx) ---
 const SettingsComponent: React.FC = () => {
     const data = useData(); const [activeTab, setActiveTab] = useState<any>('general'); const fileInputRef = useRef<HTMLInputElement>(null);
@@ -2558,10 +3174,14 @@ const SettingsComponent: React.FC = () => {
     const [localPricingConfig, setLocalPricingConfig] = useState<PricingConfig>(data.pricingConfig); const [localCouponConfig, setLocalCouponConfig] = useState<CouponPrintConfig>(data.couponPrintConfig); const [localPrinterConfig, setLocalPrinterConfig] = useState<PrinterConfig>(data.printerConfig);
     const [newCancellationReason, setNewCancellationReason] = useState(''); const [newAgreementName, setNewAgreementName] = useState(''); const [newAgreementDiscountType, setNewAgreementDiscountType] = useState<'percentage' | 'fixed'>('percentage'); const [newAgreementDiscountValue, setNewAgreementDiscountValue] = useState<number | ''>(''); const [newAgreementPlates, setNewAgreementPlates] = useState('');
     const [newCouponCode, setNewCouponCode] = useState(''); const [newCouponDiscount, setNewCouponDiscount] = useState<number | ''>(''); const [newCouponValidUntil, setNewCouponValidUntil] = useState(''); const [localCategories, setLocalCategories] = useState<VehicleCategory[]>([]);
+    const [localNfseConfig, setLocalNfseConfig] = useState<NfseConfig>(data.nfseConfig); const [isNfseSaved, setIsNfseSaved] = useState(false);
+    const [localModules, setLocalModules] = useState<AppModules>(data.modules); const [isModulesSaved, setIsModulesSaved] = useState(false);
 
     useEffect(() => { setLocalCategories(Object.values(VehicleType).map(vt => { const existing = data.vehicleCategories.find(vc => vc.name === vt); return existing ? { ...existing } : { id: vt, name: vt }; })); }, [data.vehicleCategories]);
     useEffect(() => { setCancellationPassword(data.generalSettings.cancellationPassword || ''); setDiscountPassword(data.generalSettings.discountPassword || ''); setParkingLimit(data.generalSettings.parkingLimit || 100); }, [data.generalSettings]);
     useEffect(() => { setLocalPricingConfig(data.pricingConfig); }, [data.pricingConfig]); useEffect(() => { setLocalCouponConfig(data.couponPrintConfig); }, [data.couponPrintConfig]); useEffect(() => { setLocalPrinterConfig(data.printerConfig); }, [data.printerConfig]);
+    useEffect(() => { setLocalNfseConfig(data.nfseConfig); }, [data.nfseConfig]);
+    useEffect(() => { setLocalModules(data.modules); }, [data.modules]);
 
     const handleSaveGeneralSettings = () => { data.setGeneralSettings({ cancellationPassword, discountPassword, parkingLimit }); setIsGeneralSaved(true); setTimeout(() => setIsGeneralSaved(false), 2000); };
     const handleAddPaymentMethod = () => { if (newPaymentMethod && !data.paymentMethods.some(p => p.name === newPaymentMethod.toUpperCase())) { const newMethod: PaymentMethod = { id: new Date().toISOString(), name: newPaymentMethod.toUpperCase(), isDefault: data.paymentMethods.length === 0, }; data.setPaymentMethods([...data.paymentMethods, newMethod]); setNewPaymentMethod(''); } };
@@ -2598,6 +3218,8 @@ const SettingsComponent: React.FC = () => {
     const handlePrinterProfileChange = (e: React.ChangeEvent<HTMLSelectElement>) => { const profileKey = e.target.value; const selectedPreset = printerPresets[profileKey]; if (selectedPreset) { setLocalPrinterConfig({ profile: profileKey, printWidth: selectedPreset.width, }); } };
     const handlePrinterWidthChange = (e: React.ChangeEvent<HTMLInputElement>) => { setLocalPrinterConfig(prev => ({ ...prev, printWidth: parseInt(e.target.value, 10) || 0 })); };
     const handleSavePrinterConfig = () => { data.setPrinterConfig(localPrinterConfig); setIsPrinterConfigSaved(true); setTimeout(() => setIsPrinterConfigSaved(false), 2000); };
+    const handleSaveNfseConfig = () => { data.setNfseConfig(localNfseConfig); setIsNfseSaved(true); setTimeout(() => setIsNfseSaved(false), 2000); };
+    const handleSaveModules = async () => { data.setModules(localModules); await window.electronAPI.saveData('flowestac_modules', localModules); setIsModulesSaved(true); setTimeout(() => setIsModulesSaved(false), 2000); };
 
     const handleBackup = () => { const backupData: BackupData = { customers: data.customers, employees: data.employees, movements: data.movements, cancellationLogs: data.cancellationLogs, monthlyPaymentLogs: data.monthlyPaymentLogs, services: data.services, generalSettings: data.generalSettings, paymentMethods: data.paymentMethods, pricingConfig: data.pricingConfig, coupons: data.coupons, vehicleCategories: data.vehicleCategories, agreements: data.agreements, cancellationReasons: data.cancellationReasons, couponPrintConfig: data.couponPrintConfig, printerConfig: data.printerConfig }; const jsonString = JSON.stringify(backupData, null, 2); const blob = new Blob([jsonString], { type: 'application/json' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; const date = new Date().toISOString().split('T')[0]; link.download = `sisestac_backup_${date}.json`; document.body.appendChild(link); link.click(); document.body.removeChild(link); URL.revokeObjectURL(url); };
     const handleRestore = (event: React.ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; if (!file) return; if (!window.confirm("Atenção: Restaurar um backup substituirá TODOS os dados atuais. Deseja continuar?")) { if (fileInputRef.current) { fileInputRef.current.value = ""; } return; } const reader = new FileReader(); reader.onload = (e) => { try { const text = e.target?.result; if (typeof text !== 'string') throw new Error("File content is not a string"); const parsedData: BackupData = JSON.parse(text); data.restoreBackup(parsedData); } catch (error) { console.error("Failed to parse backup file:", error); alert('Erro ao restaurar o backup. O arquivo pode estar corrompido ou em formato inválido.'); } finally { if (fileInputRef.current) { fileInputRef.current.value = ""; } } }; reader.readAsText(file); };
@@ -2610,7 +3232,7 @@ const SettingsComponent: React.FC = () => {
         <div className="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-md">
             <h2 className="text-xl font-bold mb-4 text-slate-700 dark:text-slate-200">Configurações do Sistema</h2>
             <div className="border-b border-slate-200 dark:border-slate-700 mb-4"><nav className="-mb-px flex space-x-6 overflow-x-auto">{tabs.map(tab => (<button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition-colors ${activeTab === tab.id ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300 dark:hover:text-slate-200 dark:hover:border-slate-500'}`}>{tab.label}</button>))}</nav></div>
-            <div>{renderSettingsContent(activeTab, { data, fileInputRef, editingService, setEditingService, editingPaymentMethod, setEditingPaymentMethod, editingCoupon, setEditingCoupon, editingAgreement, setEditingAgreement, isGeneralSaved, setIsGeneralSaved, isPricingSaved, setIsPricingSaved, isCouponConfigSaved, setIsCouponConfigSaved, isCategoriesSaved, setIsCategoriesSaved, isPrinterConfigSaved, setIsPrinterConfigSaved, newPaymentMethod, setNewPaymentMethod, newServiceName, setNewServiceName, newServicePrice, setNewServicePrice, cancellationPassword, setCancellationPassword, discountPassword, setDiscountPassword, parkingLimit, setParkingLimit, localPricingConfig, setLocalPricingConfig, localCouponConfig, setLocalCouponConfig, localPrinterConfig, setLocalPrinterConfig, newCancellationReason, setNewCancellationReason, newAgreementName, setNewAgreementName, newAgreementDiscountType, setNewAgreementDiscountType, newAgreementDiscountValue, setNewAgreementDiscountValue, newAgreementPlates, setNewAgreementPlates, newCouponCode, setNewCouponCode, newCouponDiscount, setNewCouponDiscount, newCouponValidUntil, setNewCouponValidUntil, localCategories, setLocalCategories, handleSaveGeneralSettings, handleAddPaymentMethod, handleDeletePaymentMethod, handleSetDefaultPaymentMethod, handleAddService, handleDeleteService, handlePricingChange, handleSavePricing, handleAddCancellationReason, handleDeleteCancellationReason, handleAddAgreement, handleDeleteAgreement, handleCouponConfigChange, handleSaveCouponConfig, handleAddCoupon, handleDeleteCoupon, handleToggleCouponStatus, handleCategoryChange, handleSaveCategories, handlePrinterProfileChange, handlePrinterWidthChange, handleSavePrinterConfig, handleBackup, handleRestore, printerPresets, handleAddTimeBand, handleUpdateTimeBand, handleDeleteTimeBand })}</div>
+            <div>{renderSettingsContent(activeTab, { data, fileInputRef, editingService, setEditingService, editingPaymentMethod, setEditingPaymentMethod, editingCoupon, setEditingCoupon, editingAgreement, setEditingAgreement, isGeneralSaved, setIsGeneralSaved, isPricingSaved, setIsPricingSaved, isCouponConfigSaved, setIsCouponConfigSaved, isCategoriesSaved, setIsCategoriesSaved, isPrinterConfigSaved, setIsPrinterConfigSaved, newPaymentMethod, setNewPaymentMethod, newServiceName, setNewServiceName, newServicePrice, setNewServicePrice, cancellationPassword, setCancellationPassword, discountPassword, setDiscountPassword, parkingLimit, setParkingLimit, localPricingConfig, setLocalPricingConfig, localCouponConfig, setLocalCouponConfig, localPrinterConfig, setLocalPrinterConfig, newCancellationReason, setNewCancellationReason, newAgreementName, setNewAgreementName, newAgreementDiscountType, setNewAgreementDiscountType, newAgreementDiscountValue, setNewAgreementDiscountValue, newAgreementPlates, setNewAgreementPlates, newCouponCode, setNewCouponCode, newCouponDiscount, setNewCouponDiscount, newCouponValidUntil, setNewCouponValidUntil, localCategories, setLocalCategories, handleSaveGeneralSettings, handleAddPaymentMethod, handleDeletePaymentMethod, handleSetDefaultPaymentMethod, handleAddService, handleDeleteService, handlePricingChange, handleSavePricing, handleAddCancellationReason, handleDeleteCancellationReason, handleAddAgreement, handleDeleteAgreement, handleCouponConfigChange, handleSaveCouponConfig, handleAddCoupon, handleDeleteCoupon, handleToggleCouponStatus, handleSaveCategories, handlePrinterProfileChange, handlePrinterWidthChange, handleSavePrinterConfig, handleBackup, handleRestore, printerPresets, handleAddTimeBand, handleUpdateTimeBand, handleDeleteTimeBand, localNfseConfig, setLocalNfseConfig, handleSaveNfseConfig, setIsNfseSaved, localModules, setLocalModules, handleSaveModules, isModulesSaved })}</div>
         </div>
     </>);
 };
@@ -2619,11 +3241,11 @@ const EditPaymentMethodModal: React.FC<any> = ({ paymentMethod, onSave, onClose 
 const EditCouponModal: React.FC<any> = ({ coupon, onSave, onClose }) => { const [code, setCode] = useState(coupon.code); const [discountPercentage, setDiscountPercentage] = useState(coupon.discountPercentage); const [validUntil, setValidUntil] = useState(coupon.validUntil || ''); const handleSave = () => { onSave({ ...coupon, code: code.toUpperCase(), discountPercentage, validUntil: validUntil || undefined }); onClose(); }; return (<div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50" onClick={onClose}><div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 w-full max-w-lg space-y-4" onClick={e => e.stopPropagation()}><h3 className="text-lg font-bold">Editar Cupom de Desconto</h3><div><label className="block text-sm font-medium">Código do Cupom</label><input type="text" value={code} onChange={e => setCode(e.target.value)} className="p-2 w-full border rounded dark:bg-slate-700 dark:border-slate-600 mt-1" /></div><div><label className="block text-sm font-medium">Percentual de Desconto (%)</label><input type="number" value={discountPercentage} onChange={e => setDiscountPercentage(parseFloat(e.target.value) || 0)} className="p-2 w-full border rounded dark:bg-slate-700 dark:border-slate-600 mt-1" /></div><div><label className="block text-sm font-medium">Válido até</label><input type="date" value={validUntil} onChange={e => setValidUntil(e.target.value)} className="p-2 w-full border rounded dark:bg-slate-700 dark:border-slate-600 mt-1" /></div><div className="flex justify-end gap-4 pt-4 border-t dark:border-slate-700"><button onClick={onClose} className="py-2 px-4 bg-slate-200 dark:bg-slate-600 rounded hover:bg-slate-300">Cancelar</button><button onClick={handleSave} className="py-2 px-4 bg-blue-600 text-white rounded hover:bg-blue-700">Salvar</button></div></div></div>); };
 const EditAgreementModal: React.FC<any> = ({ agreement, onSave, onClose }) => { const [formData, setFormData] = useState(agreement); const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => { const { name, value } = e.target; setFormData(prev => ({ ...prev, [name]: name === 'discountValue' ? parseFloat(value) || 0 : value })); }; const handleSave = () => { onSave(formData); onClose(); }; return (<div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50" onClick={onClose}><div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 w-full max-w-lg space-y-4" onClick={e => e.stopPropagation()}><h3 className="text-lg font-bold">Editar Convênio</h3><div className="space-y-4"><div><label className="block text-sm font-medium">Nome do Convênio</label><input type="text" name="name" value={formData.name} onChange={handleChange} className="p-2 w-full border rounded dark:bg-slate-700 dark:border-slate-600 mt-1" /></div><div className="grid grid-cols-2 gap-4"><div><label className="block text-sm font-medium">Tipo de Desconto</label><select name="discountType" value={formData.discountType} onChange={handleChange} className="p-2 w-full border rounded dark:bg-slate-700 dark:border-slate-600 mt-1"><option value="percentage">Percentual (%)</option><option value="fixed">Valor Fixo (R$)</option></select></div><div><label className="block text-sm font-medium">Valor</label><input type="number" name="discountValue" value={formData.discountValue} onChange={handleChange} className="p-2 w-full border rounded dark:bg-slate-700 dark:border-slate-600 mt-1" /></div></div><div><label className="block text-sm font-medium">Placas Associadas (separadas por vírgula)</label><input type="text" name="associatedPlates" value={formData.associatedPlates} onChange={handleChange} className="p-2 w-full border rounded dark:bg-slate-700 dark:border-slate-600 mt-1" /></div></div><div className="flex justify-end gap-4 pt-4 border-t dark:border-slate-700"><button onClick={onClose} className="py-2 px-4 bg-slate-200 dark:bg-slate-600 rounded hover:bg-slate-300">Cancelar</button><button onClick={handleSave} className="py-2 px-4 bg-blue-600 text-white rounded hover:bg-blue-700">Salvar</button></div></div></div>); };
 
-const tabs = [{ id: 'general', label: 'Geral' }, { id: 'pricing', label: 'Preços' }, { id: 'services', label: 'Serviços' }, { id: 'payments', label: 'Pagamentos' }, { id: 'agreements', label: 'Convênios' }, { id: 'coupons', label: 'Cupons' }, { id: 'printing', label: 'Impressão' }, { id: 'backup', label: 'Backup/Restore' }];
+const tabs = [{ id: 'general', label: 'Geral' }, { id: 'pricing', label: 'Preços' }, { id: 'services', label: 'Serviços' }, { id: 'payments', label: 'Pagamentos' }, { id: 'agreements', label: 'Convênios' }, { id: 'coupons', label: 'Cupons' }, { id: 'printing', label: 'Impressão' }, { id: 'nfse', label: 'NFSE' }, , { id: 'modulos', label: 'Módulos' }, { id: 'backup', label: 'Backup/Restore' }];
 const printerPresets: { [key: string]: { name: string, width: number } } = { 'generic_80mm': { name: 'Genérica / Somente Texto (80mm)', width: 300 }, 'epson_tm_t20_80mm': { name: 'EPSON TM-T20 (80mm)', width: 300 }, 'bematech_mp_4200_80mm': { name: 'Bematech MP-4200 (80mm)', width: 300 }, 'generic_58mm': { name: 'Genérica (58mm)', width: 200 }, 'custom': { name: 'Personalizado', width: 288 } };
 
 function renderSettingsContent(activeTab: any, props: any) {
-    const { data, fileInputRef, setEditingService, setEditingPaymentMethod, setEditingCoupon, setEditingAgreement, isGeneralSaved, isPricingSaved, isCouponConfigSaved, isCategoriesSaved, isPrinterConfigSaved, newPaymentMethod, setNewPaymentMethod, newServiceName, setNewServiceName, newServicePrice, setNewServicePrice, cancellationPassword, setCancellationPassword, discountPassword, setDiscountPassword, parkingLimit, setParkingLimit, localPricingConfig, handlePricingChange, localCouponConfig, handleCouponConfigChange, localPrinterConfig, newCancellationReason, setNewCancellationReason, newAgreementName, setNewAgreementName, newAgreementDiscountType, setNewAgreementDiscountType, newAgreementDiscountValue, setNewAgreementDiscountValue, newAgreementPlates, setNewAgreementPlates, newCouponCode, setNewCouponCode, newCouponDiscount, setNewCouponDiscount, newCouponValidUntil, setNewCouponValidUntil, localCategories, handleCategoryChange, handleSaveGeneralSettings, handleAddPaymentMethod, handleDeletePaymentMethod, handleSetDefaultPaymentMethod, handleAddService, handleDeleteService, handleSavePricing, handleAddCancellationReason, handleDeleteCancellationReason, handleAddAgreement, handleDeleteAgreement, handleSaveCouponConfig, handleAddCoupon, handleDeleteCoupon, handleToggleCouponStatus, handleSaveCategories, handlePrinterProfileChange, handlePrinterWidthChange, handleSavePrinterConfig, handleBackup, handleRestore, handleAddTimeBand, handleUpdateTimeBand, handleDeleteTimeBand } = props;
+    const { data, fileInputRef, setEditingService, setEditingPaymentMethod, setEditingCoupon, setEditingAgreement, isGeneralSaved, isPricingSaved, isCouponConfigSaved, isCategoriesSaved, isPrinterConfigSaved, newPaymentMethod, setNewPaymentMethod, newServiceName, setNewServiceName, newServicePrice, setNewServicePrice, cancellationPassword, setCancellationPassword, discountPassword, setDiscountPassword, parkingLimit, setParkingLimit, localPricingConfig, handlePricingChange, localCouponConfig, handleCouponConfigChange, localPrinterConfig, newCancellationReason, setNewCancellationReason, newAgreementName, setNewAgreementName, newAgreementDiscountType, setNewAgreementDiscountType, newAgreementDiscountValue, setNewAgreementDiscountValue, newAgreementPlates, setNewAgreementPlates, newCouponCode, setNewCouponCode, newCouponDiscount, setNewCouponDiscount, newCouponValidUntil, setNewCouponValidUntil, localCategories, handleCategoryChange, handleSaveGeneralSettings, handleAddPaymentMethod, handleDeletePaymentMethod, handleSetDefaultPaymentMethod, handleAddService, handleDeleteService, handleSavePricing, handleAddCancellationReason, handleDeleteCancellationReason, handleAddAgreement, handleDeleteAgreement, handleSaveCouponConfig, handleAddCoupon, handleDeleteCoupon, handleToggleCouponStatus, handleSaveCategories, handlePrinterProfileChange, handlePrinterWidthChange, handleSavePrinterConfig, handleSaveNfseConfig, handleBackup, handleRestore, printerPresets, handleAddTimeBand, handleUpdateTimeBand, handleDeleteTimeBand, localModules, setLocalModules, handleSaveModules, isModulesSaved } = props;
     if (activeTab === 'general') return (<GeneralSettings {...props} />);
     if (activeTab === 'pricing') return (<PricingSettings {...props} />);
     if (activeTab === 'services') return (<ServicesSettings {...props} />);
@@ -2631,6 +3253,8 @@ function renderSettingsContent(activeTab: any, props: any) {
     if (activeTab === 'agreements') return (<AgreementsSettings {...props} />);
     if (activeTab === 'coupons') return (<CouponsSettings {...props} />);
     if (activeTab === 'printing') return (<PrintingSettings {...props} />);
+    if (activeTab === 'nfse') return (<NfseSettings nfseConfig={props.localNfseConfig} setNfseConfig={props.setLocalNfseConfig} handleSaveNfseConfig={props.handleSaveNfseConfig} isNfseSaved={props.isNfseSaved} />);
+    if (activeTab === 'modulos') return (<ModulesSettings modules={props.localModules} setModules={props.setLocalModules} handleSaveModules={props.handleSaveModules} isModulesSaved={props.isModulesSaved} />);
     if (activeTab === 'backup') return (<BackupSettings {...props} />);
 
     return null;
@@ -2642,8 +3266,17 @@ function renderSettingsContent(activeTab: any, props: any) {
 const App: React.FC = () => {
     const [currentPage, setCurrentPage] = useState<Page>('dashboard');
     const [loggedInUser, setLoggedInUser] = useState<Employee | null>(null);
-    const { isDataLoaded } = useData();
+    const { isDataLoaded, setSystemLogs, generalSettings, setGeneralSettings, nfseConfig } = useData();
     const [updateReady, setUpdateReady] = useState(false);
+    const [licenseStatus, setLicenseStatus] = useState<'checking' | 'active' | 'blocked' | 'offline'>('checking');
+
+    const handleLogout = () => {
+        if (loggedInUser) {
+            const logoutEvent: SystemLog = { id: new Date().toISOString(), time: new Date(), type: 'Logout', operator: loggedInUser.name };
+            setSystemLogs(prev => [...prev, logoutEvent]);
+        }
+        setLoggedInUser(null);
+    };
 
     useEffect(() => {
         if (window.electronAPI) {
@@ -2651,6 +3284,82 @@ const App: React.FC = () => {
                 setUpdateReady(true);
             });
         }
+
+        // --- License Check ---
+        const checkLicense = async () => {
+            const GRACE_PERIOD_DAYS = 5;
+            const now = new Date();
+
+            try {
+                // Verifica licença via Asaas usando o CNPJ local (do NFSE Config)
+                if (nfseConfig && nfseConfig.cnpj) {
+                    console.log('[LICENSE] Verificando licença via Asaas...');
+                    const result = await window.electronAPI.checkAsaasLicense(nfseConfig.cnpj);
+
+                    if (!result.success) {
+                        // Offline ou erro - verifica período de carência
+                        const lastCheckStr = generalSettings.lastLicenseCheck;
+                        if (lastCheckStr) {
+                            const lastCheck = new Date(lastCheckStr);
+                            const diffTime = Math.abs(now.getTime() - lastCheck.getTime());
+                            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+                            if (diffDays > GRACE_PERIOD_DAYS) {
+                                setLicenseStatus('blocked');
+                            } else {
+                                setLicenseStatus('offline');
+                            }
+                        } else {
+                            setLicenseStatus('offline');
+                        }
+                        return;
+                    }
+
+                    if (result.status === 'blocked') {
+                        setLicenseStatus('blocked');
+                    } else {
+                        setLicenseStatus('active');
+                        setGeneralSettings((prev: any) => ({ ...prev, lastLicenseCheck: now.toISOString() }));
+                    }
+                } else {
+                    // Fallback para GitHub se não houver API Key do Asaas
+                    console.log('[LICENSE] Verificando licença via GitHub...');
+                    const response = await fetch('https://raw.githubusercontent.com/jorceli/Licencas/main/status.json', { cache: 'no-store' }).catch(() => null);
+
+                    if (!response) {
+                        const lastCheckStr = generalSettings.lastLicenseCheck;
+                        if (lastCheckStr) {
+                            const lastCheck = new Date(lastCheckStr);
+                            const diffTime = Math.abs(now.getTime() - lastCheck.getTime());
+                            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+                            if (diffDays > GRACE_PERIOD_DAYS) {
+                                setLicenseStatus('blocked');
+                            } else {
+                                setLicenseStatus('offline');
+                            }
+                        } else {
+                            setLicenseStatus('offline');
+                        }
+                        return;
+                    }
+
+                    const json = await response.json();
+                    if (json.globalStatus === 'blocked') {
+                        setLicenseStatus('blocked');
+                    } else {
+                        setLicenseStatus('active');
+                        setGeneralSettings((prev: any) => ({ ...prev, lastLicenseCheck: now.toISOString() }));
+                    }
+                }
+            } catch (err) {
+                console.error('[LICENSE] Erro na verificação:', err);
+                setLicenseStatus('offline');
+            }
+        };
+        checkLicense();
+        const interval = setInterval(checkLicense, 15 * 60 * 1000); // Check every 15 mins
+        return () => clearInterval(interval);
     }, []);
 
     if (!isDataLoaded) {
@@ -2668,10 +3377,13 @@ const App: React.FC = () => {
                     currentPage={currentPage}
                     setCurrentPage={setCurrentPage}
                     loggedInUser={loggedInUser}
-                    onLogout={() => setLoggedInUser(null)}
+                    onLogout={handleLogout}
                     updateReady={updateReady}
+                    licenseStatus={licenseStatus}
+                    nfseConfig={nfseConfig}
                 />
                 <div className="flex-1 p-4 overflow-y-auto">
+                    {licenseStatus === 'blocked' && <LicenseBlockedScreen />}
                     {currentPage === 'dashboard' && <Dashboard />}
                     {currentPage === 'movements' && <Movements />}
                     {currentPage === 'customers' && <Customers />}

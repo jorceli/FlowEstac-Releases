@@ -6,4 +6,6 @@ export { AgreementsSettings } from './AgreementsSettings';
 export { CouponsSettings } from './CouponsSettings';
 export { PrintingSettings } from './PrintingSettings';
 export { BackupSettings } from './BackupSettings';
+export { NfseSettings } from './NfseSettings';
+export { ModulesSettings } from './ModulesSettings';
 

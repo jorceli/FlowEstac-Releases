@@ -3,22 +3,16 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   /**
    * Envia dados para serem salvos no processo principal.
-   * @param {string} key - A chave de identificação do dado (ex: 'flowestac_customers').
-   * @param {any} data - O objeto de dados a ser salvo.
    */
   saveData: (key, data) => ipcRenderer.send('save-data', { key, data }),
 
   /**
    * Solicita dados do processo principal.
-   * @param {string} key - A chave de identificação do dado a ser carregado.
-   * @param {any} initialData - Os dados iniciais para usar se o arquivo não existir.
-   * @returns {Promise<any>} - Uma promessa que resolve com os dados carregados.
    */
   loadData: (key, initialData) => ipcRenderer.invoke('load-data', { key, initialData }),
 
   /**
    * Registra um callback para ser executado quando uma atualização for baixada.
-   * @param {Function} callback - A função a ser chamada.
    */
   onUpdateReady: (callback) => ipcRenderer.on('update_ready', (_event, ...args) => callback(...args)),
 
@@ -26,6 +20,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * Envia um comando para o processo principal para reiniciar e instalar a atualização.
    */
   restartApp: () => ipcRenderer.send('restart_app'),
+  onUpdateStatus: (callback) => ipcRenderer.on('update_status', (event, status) => callback(status)),
 
   /**
    * Reinicia o computador.
@@ -44,17 +39,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   /**
    * Imprime conteúdo HTML silenciosamente.
-   * @param {string} content - O conteúdo HTML.
-   * @param {string} printerName - Nome da impressora.
-   * @param {number} printWidth - Largura da impressão em pixels.
    */
   printHtml: (content, printerName, printWidth) => ipcRenderer.invoke('print-html', { content, printerName, printWidth }),
 
   /**
    * Imprime dados estruturados usando electron-pos-printer.
-   * @param {any[]} data - Array de objetos de dados para impressão.
-   * @param {string} printerName - Nome da impressora.
-   * @param {number|string} width - Largura da impressão (ex: '100%', '280px').
    */
   printData: (data, printerName, width) => ipcRenderer.invoke('print-data', { data, printerName, width }),
 
@@ -62,6 +51,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * Obtém a versão do aplicativo.
    */
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+
+  /**
+   * Dispara a emissão de NFSE via módulo externo.
+   */
+  emitNfse: (movement, config) => ipcRenderer.invoke('emit-nfse', { movement, config }),
+
+  /**
+   * Verifica informações de validade e titular do certificado digital.
+   */
+  checkCertificateInfo: (certPath, certPassword) => ipcRenderer.invoke('check-certificate-info', { certPath, certPassword }),
+
+  /**
+   * Verifica o status da licença no Asaas.
+   */
+  checkAsaasLicense: (cnpj) => ipcRenderer.invoke('check-asaas-license', { cnpj }),
 
   /**
    * Fecha a aplicação.

@@ -29,3 +29,5 @@ release
 *.njsproj
 *.sln
 *.sw?
+# Environment variables
+.env
