@@ -3,7 +3,11 @@ import React from 'react';
 interface AppModules {
     lpr: boolean;
     whatsapp: boolean;
+    whatsappInstance?: string;
+    whatsappToken?: string;
     barriers: boolean;
+    barrierPort?: string;
+    barrierIp?: string;
 }
 
 interface ModulesSettingsProps {
@@ -26,6 +30,13 @@ export const ModulesSettings: React.FC<ModulesSettingsProps> = ({
         });
     };
 
+    const handleChange = (key: keyof AppModules, value: string) => {
+        setModules({
+            ...modules,
+            [key]: value
+        });
+    };
+
     return (
         <div className="space-y-6">
             <div className="border-b pb-4 dark:border-slate-700">
@@ -37,9 +48,8 @@ export const ModulesSettings: React.FC<ModulesSettingsProps> = ({
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {/* WhatsApp Integration */}
-                <div className={`p-4 rounded-xl border-2 transition-all cursor-pointer ${modules.whatsapp ? 'border-green-500 bg-green-50 dark:bg-green-900/20' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300'}`}
-                    onClick={() => toggleModule('whatsapp')}>
-                    <div className="flex items-center justify-between mb-2">
+                <div className={`p-4 rounded-xl border-2 transition-all ${modules.whatsapp ? 'border-green-500 bg-green-50 dark:bg-green-900/20' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300'}`}>
+                    <div className="flex items-center justify-between mb-2 cursor-pointer" onClick={() => toggleModule('whatsapp')}>
                         <div className="flex items-center gap-3">
                             <div className={`p-2 rounded-lg ${modules.whatsapp ? 'bg-green-100 text-green-600' : 'bg-slate-100 text-slate-500'}`}>
                                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
@@ -52,15 +62,39 @@ export const ModulesSettings: React.FC<ModulesSettingsProps> = ({
                             <div className={`bg-white w-4 h-4 rounded-full shadow-sm transform transition-transform ${modules.whatsapp ? 'translate-x-6' : 'translate-x-0'}`} />
                         </div>
                     </div>
-                    <p className="text-sm text-slate-600 dark:text-slate-400 mt-2">
+                    <p className="text-sm text-slate-600 dark:text-slate-400 mt-2 mb-4">
                         Permite o envio de comprovantes de entrada e saída via WhatsApp Web. Reduz o uso de papel.
                     </p>
+
+                    {modules.whatsapp && (
+                        <div className="space-y-3 pt-3 border-t border-green-200 dark:border-green-800/30">
+                            <div>
+                                <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">ID da Instância</label>
+                                <input
+                                    type="text"
+                                    value={modules.whatsappInstance || ''}
+                                    onChange={(e) => handleChange('whatsappInstance', e.target.value)}
+                                    placeholder="Ex: instance_12345"
+                                    className="w-full p-2 text-sm border rounded dark:bg-slate-800 dark:border-slate-600 focus:ring-2 focus:ring-green-500 outline-none"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Token de Acesso</label>
+                                <input
+                                    type="password"
+                                    value={modules.whatsappToken || ''}
+                                    onChange={(e) => handleChange('whatsappToken', e.target.value)}
+                                    placeholder="••••••••••••"
+                                    className="w-full p-2 text-sm border rounded dark:bg-slate-800 dark:border-slate-600 focus:ring-2 focus:ring-green-500 outline-none"
+                                />
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 {/* Access Control (Cancelas/Totem) */}
-                <div className={`p-4 rounded-xl border-2 transition-all cursor-pointer ${modules.barriers ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300'}`}
-                    onClick={() => toggleModule('barriers')}>
-                    <div className="flex items-center justify-between mb-2">
+                <div className={`p-4 rounded-xl border-2 transition-all ${modules.barriers ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-slate-200 dark:border-slate-700 hover:border-slate-300'}`}>
+                    <div className="flex items-center justify-between mb-2 cursor-pointer" onClick={() => toggleModule('barriers')}>
                         <div className="flex items-center gap-3">
                             <div className={`p-2 rounded-lg ${modules.barriers ? 'bg-blue-100 text-blue-600' : 'bg-slate-100 text-slate-500'}`}>
                                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
@@ -73,9 +107,34 @@ export const ModulesSettings: React.FC<ModulesSettingsProps> = ({
                             <div className={`bg-white w-4 h-4 rounded-full shadow-sm transform transition-transform ${modules.barriers ? 'translate-x-6' : 'translate-x-0'}`} />
                         </div>
                     </div>
-                    <p className="text-sm text-slate-600 dark:text-slate-400 mt-2">
+                    <p className="text-sm text-slate-600 dark:text-slate-400 mt-2 mb-4">
                         Integração com Totens e Cancelas. Gera QR Codes nos tickets para leitura automática na saída.
                     </p>
+
+                    {modules.barriers && (
+                        <div className="space-y-3 pt-3 border-t border-blue-200 dark:border-blue-800/30">
+                            <div>
+                                <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Porta COM / Serial</label>
+                                <input
+                                    type="text"
+                                    value={modules.barrierPort || ''}
+                                    onChange={(e) => handleChange('barrierPort', e.target.value)}
+                                    placeholder="Ex: COM3"
+                                    className="w-full p-2 text-sm border rounded dark:bg-slate-800 dark:border-slate-600 focus:ring-2 focus:ring-blue-500 outline-none"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">IP da Controladora</label>
+                                <input
+                                    type="text"
+                                    value={modules.barrierIp || ''}
+                                    onChange={(e) => handleChange('barrierIp', e.target.value)}
+                                    placeholder="Ex: 192.168.1.100"
+                                    className="w-full p-2 text-sm border rounded dark:bg-slate-800 dark:border-slate-600 focus:ring-2 focus:ring-blue-500 outline-none"
+                                />
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 {/* LPR (Placeholder) */}
@@ -105,8 +164,8 @@ export const ModulesSettings: React.FC<ModulesSettingsProps> = ({
                     onClick={handleSaveModules}
                     disabled={isModulesSaved}
                     className={`py-2 px-6 font-semibold rounded-lg transition-all ${isModulesSaved
-                            ? 'bg-green-600 text-white cursor-default'
-                            : 'bg-blue-600 text-white hover:bg-blue-700 shadow-lg hover:shadow-blue-500/30'
+                        ? 'bg-green-600 text-white cursor-default'
+                        : 'bg-blue-600 text-white hover:bg-blue-700 shadow-lg hover:shadow-blue-500/30'
                         }`}
                 >
                     {isModulesSaved ? 'Módulos Salvos!' : 'Salvar Alterações'}

@@ -21,7 +21,17 @@ export const NfseSettings: React.FC<NfseSettingsProps> = ({
     }, [nfseConfig]);
 
     const handleChange = (field: keyof NfseConfig, value: any) => {
-        setLocalConfig(prev => ({ ...prev, [field]: value }));
+        let finalValue = value;
+        if (field === 'cnpj') {
+            finalValue = value
+                .replace(/\D/g, '')
+                .replace(/^(\d{2})(\d)/, '$1.$2')
+                .replace(/^(\d{2})\.(\d{3})(\d)/, '$1.$2.$3')
+                .replace(/\.(\d{3})(\d)/, '.$1/$2')
+                .replace(/(\d{4})(\d)/, '$1-$2')
+                .replace(/(-\d{2})\d+?$/, '$1');
+        }
+        setLocalConfig(prev => ({ ...prev, [field]: finalValue }));
     };
 
     const handleCheckCert = async () => {
@@ -46,11 +56,8 @@ export const NfseSettings: React.FC<NfseSettingsProps> = ({
 
     const handleSave = () => {
         setNfseConfig(localConfig);
-        // Pequeno delay para garantir que o setNfseConfig (React state) seja processado antes do save (que lê do state)
-        // No DataProvider, o setNfseConfig é assíncrono.
-        setTimeout(() => {
-            handleSaveNfseConfig();
-        }, 100);
+        // Passamos o localConfig diretamente para evitar dependência do tempo de atualização do state do pai
+        handleSaveNfseConfig(localConfig);
     };
 
     return (

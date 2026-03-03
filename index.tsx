@@ -3,6 +3,37 @@ import React, { useState, useMemo, useEffect, createContext, useContext, ReactNo
 import ReactDOM from 'react-dom/client';
 import { GeneralSettings, PricingSettings, ServicesSettings, PaymentsSettings, AgreementsSettings, CouponsSettings, PrintingSettings, BackupSettings, NfseSettings, ModulesSettings } from './components/settings';
 
+import ptStrings from './src/i18n/pt.json';
+import enStrings from './src/i18n/en.json';
+import esStrings from './src/i18n/es.json';
+
+// =================================================================
+// i18n
+// =================================================================
+export type Language = 'pt' | 'en' | 'es';
+
+const translations: Record<Language, any> = {
+    pt: ptStrings,
+    en: enStrings,
+    es: esStrings,
+};
+
+interface LanguageContextType {
+    language: Language;
+    setLanguage: (lang: Language) => void;
+    t: (path: string) => string;
+}
+
+const LanguageContext = createContext<LanguageContextType | undefined>(undefined);
+
+export const useLanguage = () => {
+    const context = useContext(LanguageContext);
+    if (!context) throw new Error('useLanguage must be used within LanguageProvider');
+    return context;
+};
+
+
+
 // =================================================================
 // ERROR BOUNDARY & FAILSAFE
 // =================================================================
@@ -85,6 +116,7 @@ export interface Customer {
     cpfCnpj: string;
     plate: string;
     plate2?: string;
+    model?: string;
     phone: string;
     customerType: CustomerType;
     lastPayment?: string;
@@ -190,6 +222,22 @@ export interface SystemLog {
     id: string;
     time: Date;
     type: 'Login' | 'Logout';
+    operator: string;
+}
+
+export interface CashTransaction {
+    id: string;
+    date: Date;
+    type: 'opening' | 'withdrawal' | 'expense';
+    amount: number;
+    description: string;
+    operator: string;
+    paymentMethod?: string; // For expenses paid by card, etc.
+}
+
+export interface DailyCashBalance {
+    date: string; // YYYY-MM-DD format
+    openingBalance: number;
     operator: string;
 }
 
@@ -372,7 +420,10 @@ export interface BackupData {
     couponPrintConfig: CouponPrintConfig;
     printerConfig: PrinterConfig;
     systemLogs?: SystemLog[];
+    cashTransactions?: CashTransaction[];
+    dailyCashBalances?: DailyCashBalance[];
 }
+
 
 // =================================================================
 // ICONS (from components/icons.tsx)
@@ -497,6 +548,8 @@ export interface GeneralSettings {
     discountPassword?: string;
     parkingLimit?: number;
     lastLicenseCheck?: string; // ISO Date
+    language?: Language;
+    installationDate?: string; // ISO Date
 }
 const initialCustomers: Customer[] = [
     { id: '1', name: 'PAULO DA SILVA', cpfCnpj: '123.456.789-01', plate: 'BRA2E19', plate2: 'XYZ1234', phone: '(51) 9988-7766', customerType: CustomerType.MENSALISTA, lastPayment: '2024-06-10', isMensalista: true, isMensalistaDiurno: true, startDate: '2023-01-15', monthlyFee: 250.00, addressStreet: 'Av. Ipiranga', addressNumber: '123', addressNeighborhood: 'Partenon', addressCity: 'Porto Alegre', addressState: 'RS', addressZip: '90000-000' },
@@ -514,7 +567,7 @@ const initialAgreements: Agreement[] = [{ id: '1', name: 'Empresa XPTO', discoun
 const initialCancellationReasons: CancellationReason[] = [{ id: '1', reason: 'Entrada indevida' }, { id: '2', reason: 'Cliente desistiu' }];
 const initialCouponPrintConfig: CouponPrintConfig = { headerMessage: 'ESTACIONAMENTO RUA RIACHUELO, 901\nTELEFONE/WHATSAPP 51 998595952', footerMessage: 'HORÁRIOS FUNCIONAMENTO:\nSEGUNDA A SEXTA DAS 07:00 HRS ÀS 19:00 HRS\n\nVOLTE SEMPRE!!!', entryCopies: 1, exitCopies: 1, validatePlate: true, highlightPlate: true, printCouponNumberInFooter: false, showSummary: true, showOverdueMonthly: false, printBarcode: false, };
 const initialPrinterConfig: PrinterConfig = { profile: 'generic_80mm', printWidth: 300, };
-const initialGeneralSettings: GeneralSettings = { cancellationPassword: '', discountPassword: '', parkingLimit: 100 };
+const initialGeneralSettings: GeneralSettings = { cancellationPassword: '', discountPassword: '', parkingLimit: 100, language: 'pt', installationDate: undefined };
 const initialNfseConfig: NfseConfig = {
     cnpj: '',
     im: '',
@@ -561,7 +614,7 @@ const sanitizeMovements = (data: any[]): VehicleMovement[] => {
     }, []);
 };
 
-const sanitizeDateArray = <T extends { cancellationTime?: any; paymentDate?: any; movement?: any; time?: any }>(data: any[], dateField: keyof T): T[] => {
+const sanitizeDateArray = <T extends { cancellationTime?: any; paymentDate?: any; movement?: any; time?: any; date?: any }>(data: any[], dateField: keyof T): T[] => {
     if (!Array.isArray(data)) return [];
     return data.filter(item => item && item[dateField] && !isNaN(new Date(item[dateField]).getTime())).map(item => ({
         ...item,
@@ -581,7 +634,11 @@ const sanitizeDateArray = <T extends { cancellationTime?: any; paymentDate?: any
 interface AppModules {
     lpr: boolean;
     whatsapp: boolean;
+    whatsappInstance?: string;
+    whatsappToken?: string;
     barriers: boolean;
+    barrierPort?: string;
+    barrierIp?: string;
 }
 
 const initialAppModules: AppModules = {
@@ -625,9 +682,16 @@ interface DataContextProps {
     setSystemLogs: React.Dispatch<React.SetStateAction<SystemLog[]>>;
     nfseConfig: NfseConfig;
     setNfseConfig: React.Dispatch<React.SetStateAction<NfseConfig>>;
+    cashTransactions: CashTransaction[];
+    setCashTransactions: React.Dispatch<React.SetStateAction<CashTransaction[]>>;
+    dailyCashBalances: DailyCashBalance[];
+    setDailyCashBalances: React.Dispatch<React.SetStateAction<DailyCashBalance[]>>;
+    modules: AppModules;
+    setModules: React.Dispatch<React.SetStateAction<AppModules>>;
     restoreBackup: (data: BackupData) => void;
     isDataLoaded: boolean;
 }
+
 
 const DataContext = createContext<DataContextProps | undefined>(undefined);
 
@@ -650,7 +714,10 @@ const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
     const [systemLogs, setSystemLogs] = useState<SystemLog[]>([]);
     const [nfseConfig, setNfseConfig] = useState<NfseConfig>(initialNfseConfig);
     const [modules, setModules] = useState<AppModules>(initialAppModules);
+    const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
+    const [dailyCashBalances, setDailyCashBalances] = useState<DailyCashBalance[]>([]);
     const [isDataLoaded, setIsDataLoaded] = useState(false);
+
 
     // Efeito para CARREGAR todos os dados na montagem do componente
     useEffect(() => {
@@ -700,6 +767,12 @@ const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
                 const loadedModules = await window.electronAPI.loadData('flowestac_modules', initialAppModules);
                 setModules({ ...initialAppModules, ...loadedModules });
 
+                const rawCashTransactions = await window.electronAPI.loadData('flowestac_cash_transactions', []);
+                setCashTransactions(sanitizeDateArray(rawCashTransactions, 'date'));
+
+                const loadedDailyCashBalances = await window.electronAPI.loadData('flowestac_daily_cash_balances', []);
+                setDailyCashBalances(loadedDailyCashBalances);
+
             } catch (error) {
                 console.error("Failed to load data, using initial defaults.", error);
                 // Fallback to initial data in case of a critical loading error
@@ -732,6 +805,8 @@ const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
     useEffect(() => { if (isDataLoaded) window.electronAPI.saveData('flowestac_monthly_payments', monthlyPaymentLogs); }, [monthlyPaymentLogs, isDataLoaded]);
     useEffect(() => { if (isDataLoaded) window.electronAPI.saveData('flowestac_system_logs', systemLogs); }, [systemLogs, isDataLoaded]);
     useEffect(() => { if (isDataLoaded) window.electronAPI.saveData('flowestac_nfse_config', nfseConfig); }, [nfseConfig, isDataLoaded]);
+    useEffect(() => { if (isDataLoaded) window.electronAPI.saveData('flowestac_cash_transactions', cashTransactions); }, [cashTransactions, isDataLoaded]);
+    useEffect(() => { if (isDataLoaded) window.electronAPI.saveData('flowestac_daily_cash_balances', dailyCashBalances); }, [dailyCashBalances, isDataLoaded]);
 
 
     // Função para restaurar todos os dados de um backup
@@ -752,8 +827,11 @@ const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
         setCancellationLogs(sanitizeDateArray(data.cancellationLogs || [], 'cancellationTime'));
         setMonthlyPaymentLogs(sanitizeDateArray(data.monthlyPaymentLogs || [], 'paymentDate'));
         setSystemLogs(sanitizeDateArray(data.systemLogs || [], 'time'));
+        setCashTransactions(sanitizeDateArray(data.cashTransactions || [], 'date'));
+        setDailyCashBalances(data.dailyCashBalances || []);
         alert('Backup restaurado com sucesso! Os dados foram carregados.');
     };
+
 
     const value = {
         customers, setCustomers,
@@ -774,9 +852,12 @@ const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
         systemLogs, setSystemLogs,
         nfseConfig, setNfseConfig,
         modules, setModules,
+        cashTransactions, setCashTransactions,
+        dailyCashBalances, setDailyCashBalances,
         restoreBackup,
         isDataLoaded
     };
+
 
     return <DataContext.Provider value={value}>{children}</DataContext.Provider>;
 };
@@ -788,6 +869,32 @@ const useData = () => {
     }
     return context;
 };
+
+const LanguageProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+    const { generalSettings, setGeneralSettings, isDataLoaded } = useData();
+    const language = generalSettings.language || 'pt';
+
+    const setLanguage = (lang: Language) => {
+        setGeneralSettings(prev => ({ ...prev, language: lang }));
+    };
+
+    const t = (path: string) => {
+        const keys = path.split('.');
+        let result = translations[language];
+        for (const key of keys) {
+            if (!result || result[key] === undefined) return path;
+            result = result[key];
+        }
+        return result;
+    };
+
+    return (
+        <LanguageContext.Provider value={{ language, setLanguage, t }}>
+            {children}
+        </LanguageContext.Provider>
+    );
+};
+
 
 // =================================================================
 // COMPONENTS
@@ -803,9 +910,22 @@ const Sidebar: React.FC<{
     licenseStatus: 'checking' | 'active' | 'blocked' | 'offline';
     nfseConfig: NfseConfig;
 }> = ({ currentPage, setCurrentPage, loggedInUser, onLogout, updateReady, licenseStatus, nfseConfig }) => {
+    const { t } = useLanguage();
     const [version, setVersion] = useState<string>('...');
     const [updateStatus, setUpdateStatus] = useState<string>('');
     const [isCollapsed, setIsCollapsed] = useState(false);
+    const [isNetworkOnline, setIsNetworkOnline] = useState(navigator.onLine);
+
+    useEffect(() => {
+        const handleOnline = () => setIsNetworkOnline(true);
+        const handleOffline = () => setIsNetworkOnline(false);
+        window.addEventListener('online', handleOnline);
+        window.addEventListener('offline', handleOffline);
+        return () => {
+            window.removeEventListener('online', handleOnline);
+            window.removeEventListener('offline', handleOffline);
+        };
+    }, []);
 
     useEffect(() => {
         if (window.electronAPI && window.electronAPI.getAppVersion) {
@@ -817,12 +937,12 @@ const Sidebar: React.FC<{
     }, []);
 
     const menuItems = [
-        { id: 'dashboard', label: 'Dashboard', icon: DashboardIcon },
-        { id: 'movements', label: 'Movimentação', icon: CarIcon },
-        { id: 'customers', label: 'Clientes', icon: UsersIcon },
-        { id: 'employees', label: 'Funcionários', icon: UserGroupIcon },
-        { id: 'reports', label: 'Relatórios', icon: ChartBarIcon },
-        { id: 'settings', label: 'Configurações', icon: CogIcon },
+        { id: 'dashboard', label: t('common.dashboard'), icon: DashboardIcon },
+        { id: 'movements', label: t('common.movements'), icon: CarIcon },
+        { id: 'customers', label: t('common.customers'), icon: UsersIcon },
+        { id: 'employees', label: t('common.employees'), icon: UserGroupIcon },
+        { id: 'reports', label: t('common.reports'), icon: ChartBarIcon },
+        { id: 'settings', label: t('common.settings'), icon: CogIcon },
     ];
 
     const visibleMenuItems = loggedInUser.isAdmin
@@ -830,7 +950,7 @@ const Sidebar: React.FC<{
         : menuItems.filter(item => item.id === 'dashboard');
 
     // Lógica do Status do Certificado (Simplificada para modo recolhido)
-    let certStatusText = 'Certificado Não Configurado';
+    let certStatusText = t('sidebar.certNotConfigured');
     let certStatusColor = 'text-slate-500';
     let certStatusBg = 'bg-slate-400';
     let certDotColor = 'bg-slate-400';
@@ -840,18 +960,18 @@ const Sidebar: React.FC<{
             const expirationDate = new Date(nfseConfig.certExpiration);
             const today = new Date();
             if (expirationDate < today) {
-                certStatusText = 'Certificado Vencido';
+                certStatusText = t('sidebar.certExpired');
                 certStatusColor = 'text-red-600';
                 certStatusBg = 'bg-red-500';
                 certDotColor = 'bg-red-500';
             } else {
-                certStatusText = 'Certificado OK';
+                certStatusText = t('sidebar.certOk');
                 certStatusColor = 'text-green-600';
                 certStatusBg = 'bg-green-500';
                 certDotColor = 'bg-green-500';
             }
         } else {
-            certStatusText = 'Certificado Pendente';
+            certStatusText = t('sidebar.certPendente');
             certStatusColor = 'text-orange-600';
             certStatusBg = 'bg-orange-500';
             certDotColor = 'bg-orange-500';
@@ -864,7 +984,7 @@ const Sidebar: React.FC<{
             <button
                 onClick={() => setIsCollapsed(!isCollapsed)}
                 className="absolute -right-3 top-6 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-full p-1 shadow-md hover:bg-slate-100 dark:hover:bg-slate-600 transition-colors z-50 text-slate-500 dark:text-slate-300"
-                title={isCollapsed ? "Expandir" : "Recolher"}
+                title={isCollapsed ? t('sidebar.expand') : t('sidebar.collapse')}
             >
                 {isCollapsed ? (
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
@@ -917,12 +1037,25 @@ const Sidebar: React.FC<{
             <div className={`px-4 py-4 border-t border-slate-200 dark:border-slate-800 space-y-3 bg-slate-100/50 dark:bg-slate-800/50 transition-all duration-300 ${isCollapsed ? 'items-center flex flex-col' : ''}`}>
 
                 {/* Status System */}
-                <div className={`flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider transition-all duration-200 ${isCollapsed ? 'justify-center' : ''}`} title={isCollapsed ? (licenseStatus === 'active' ? 'Online' : 'Offline') : ''}>
-                    <div className={`w-2.5 h-2.5 rounded-full ring-2 ring-white dark:ring-slate-700 shadow-sm flex-shrink-0 ${licenseStatus === 'active' ? 'bg-green-500' : licenseStatus === 'blocked' ? 'bg-red-500' : licenseStatus === 'offline' ? 'bg-orange-500' : 'bg-slate-400 animate-pulse'}`} />
-                    <span className={`whitespace-nowrap overflow-hidden transition-all duration-300 ${isCollapsed ? 'w-0 opacity-0 hidden' : 'w-auto opacity-100'} ${licenseStatus === 'active' ? 'text-green-600' : licenseStatus === 'blocked' ? 'text-red-600' : licenseStatus === 'offline' ? 'text-orange-600' : 'text-slate-500'}`}>
-                        {licenseStatus === 'active' ? 'Sistema Online' :
-                            licenseStatus === 'blocked' ? 'Bloqueado' :
-                                licenseStatus === 'offline' ? 'Offline' : 'Verificando...'}
+                <div className={`flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider transition-all duration-200 ${isCollapsed ? 'justify-center' : ''}`}
+                    title={isCollapsed ? (!isNetworkOnline ? t('sidebar.noInternet') : licenseStatus === 'active' ? t('sidebar.online') : licenseStatus === 'blocked' ? t('sidebar.blocked') : t('sidebar.offline')) : ''}>
+
+                    <div className={`w-2.5 h-2.5 rounded-full ring-2 ring-white dark:ring-slate-700 shadow-sm flex-shrink-0 
+                        ${!isNetworkOnline ? 'bg-slate-400' :
+                            licenseStatus === 'active' ? 'bg-green-500' :
+                                licenseStatus === 'blocked' ? 'bg-red-500' :
+                                    licenseStatus === 'offline' ? 'bg-orange-500' : 'bg-slate-400 animate-pulse'}`}
+                    />
+
+                    <span className={`whitespace-nowrap overflow-hidden transition-all duration-300 ${isCollapsed ? 'w-0 opacity-0 hidden' : 'w-auto opacity-100'} 
+                        ${!isNetworkOnline ? 'text-slate-500' :
+                            licenseStatus === 'active' ? 'text-green-600' :
+                                licenseStatus === 'blocked' ? 'text-red-600' :
+                                    licenseStatus === 'offline' ? 'text-orange-600' : 'text-slate-500'}`}>
+                        {!isNetworkOnline ? t('sidebar.noInternet') :
+                            licenseStatus === 'active' ? t('sidebar.online') :
+                                licenseStatus === 'blocked' ? t('sidebar.blocked') :
+                                    licenseStatus === 'offline' ? t('sidebar.offline') : t('sidebar.checking')}
                     </span>
                 </div>
 
@@ -947,10 +1080,10 @@ const Sidebar: React.FC<{
                     <button
                         onClick={() => window.electronAPI.restartApp()}
                         className={`flex items-center justify-center p-2 rounded-xl transition-all duration-200 text-white bg-green-600 hover:bg-green-700 animate-pulse shadow-md ${isCollapsed ? 'w-10 h-10' : 'w-full'}`}
-                        title="Instalar Atualização"
+                        title={t('common.update')}
                     >
                         <DownloadIcon className="h-5 w-5" />
-                        {!isCollapsed && <span className="font-medium ml-2 text-sm">Atualizar</span>}
+                        {!isCollapsed && <span className="font-medium ml-2 text-sm">{t('common.update')}</span>}
                     </button>
                 </div>
             )}
@@ -959,21 +1092,20 @@ const Sidebar: React.FC<{
                 <button
                     onClick={onLogout}
                     className={`flex items-center justify-center p-2 rounded-xl transition-all duration-200 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 border border-transparent hover:border-red-200 dark:hover:border-red-800 ${isCollapsed ? 'w-10 h-10' : 'w-full hover:shadow-sm'}`}
-                    title="Sair do Sistema"
+                    title={t('common.logout')}
                 >
                     <LogoutIcon className="h-5 w-5" />
-                    {!isCollapsed && <span className="font-medium ml-2 text-sm">Sair</span>}
+                    {!isCollapsed && <span className="font-medium ml-2 text-sm">{t('common.logout')}</span>}
                 </button>
             </div>
 
-            {!isCollapsed && (
-                <div className="pb-4 text-center text-[10px] text-slate-400 font-medium">
-                    <p className="opacity-70">FlowEstac v1.1.35</p>
-                </div>
-            )}
+            <div className="pb-4 text-center text-[10px] text-slate-400 font-medium">
+                <p className="opacity-70">FlowEstac v{version}</p>
+            </div>
         </aside>
     );
 };
+
 
 // --- Helper function to map CustomerType to ChargeType
 const getChargeTypeFromCustomerType = (customerType: CustomerType): ChargeType => {
@@ -1020,6 +1152,12 @@ const Dashboard: React.FC = () => {
     const [plateSearch, setPlateSearch] = useState('');
     const plateInputRef = useRef<HTMLInputElement>(null);
 
+    // Estados para modais de gestão de caixa
+    const [isOpeningBalanceModalOpen, setIsOpeningBalanceModalOpen] = useState(false);
+    const [isWithdrawalModalOpen, setIsWithdrawalModalOpen] = useState(false);
+    const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
+    const [alertMessage, setAlertMessage] = useState(''); // Global alert state
+
     // Focus management
     const focusPlateInput = () => {
         if (
@@ -1029,7 +1167,10 @@ const Dashboard: React.FC = () => {
             !selectedMovementForEdit &&
             !movementToCancel &&
             !movementForPrint &&
-            !isConfirmEntryModalOpen
+            !isConfirmEntryModalOpen &&
+            !isOpeningBalanceModalOpen &&
+            !isWithdrawalModalOpen &&
+            !isExpenseModalOpen
         ) {
             // Use requestAnimationFrame for smoother focus transition
             requestAnimationFrame(() => {
@@ -1038,6 +1179,13 @@ const Dashboard: React.FC = () => {
                     plateInputRef.current.select();
                 }
             });
+            // FALLBACK: Ensure focus returns even if the first attempt fails (browser timing)
+            setTimeout(() => {
+                if (plateInputRef.current) {
+                    plateInputRef.current.focus();
+                    // Don't select again to avoid annoyance if user started typing
+                }
+            }, 150);
         }
     };
 
@@ -1079,12 +1227,12 @@ const Dashboard: React.FC = () => {
             window.removeEventListener('focus', handleWindowFocus);
             document.removeEventListener('mousedown', handleDocumentClick);
         };
-    }, [isMonthlyPaymentModalOpen, isCashClosingModalOpen, selectedMovementForPayment, selectedMovementForEdit, movementToCancel, movementForPrint]);
+    }, [isMonthlyPaymentModalOpen, isCashClosingModalOpen, selectedMovementForPayment, selectedMovementForEdit, movementToCancel, movementForPrint, isOpeningBalanceModalOpen, isWithdrawalModalOpen, isExpenseModalOpen]);
 
     // Auto-focus when returning from modals or clearing plate
     useEffect(() => {
         focusPlateInput();
-    }, [isMonthlyPaymentModalOpen, isCashClosingModalOpen, selectedMovementForPayment, selectedMovementForEdit, movementToCancel, movementForPrint, isConfirmEntryModalOpen]);
+    }, [isMonthlyPaymentModalOpen, isCashClosingModalOpen, selectedMovementForPayment, selectedMovementForEdit, movementToCancel, movementForPrint, isConfirmEntryModalOpen, isOpeningBalanceModalOpen, isWithdrawalModalOpen, isExpenseModalOpen]);
 
     const Clock = () => {
         const [time, setTime] = useState(new Date());
@@ -1127,7 +1275,7 @@ const Dashboard: React.FC = () => {
                 .find(m => m.plate.toUpperCase() === newPlate);
 
             if (existingCustomer) {
-                setModel(lastMovement?.model || ''); // Pre-fill model from last movement if available
+                setModel(existingCustomer.model || lastMovement?.model || ''); // Pre-fill model from customer or last movement
                 setEntryCustomerName(existingCustomer.name);
                 setEntryCustomerPhone(existingCustomer.phone);
                 setCustomerType(existingCustomer.customerType);
@@ -1146,7 +1294,7 @@ const Dashboard: React.FC = () => {
 
     const handleRegisterEntry = () => {
         if (!plate) {
-            alert('A placa é obrigatória.');
+            setAlertMessage('A placa é obrigatória.');
             return;
         }
 
@@ -1344,6 +1492,16 @@ const Dashboard: React.FC = () => {
             />
             <EditMovementModal movement={selectedMovementForEdit} onClose={() => setSelectedMovementForEdit(null)} onSave={handleSaveEditedMovement} />
             <RegisterMonthlyPaymentModal isOpen={isMonthlyPaymentModalOpen} onClose={() => setIsMonthlyPaymentModalOpen(false)} />
+            {/* Modals Globais */}
+            <AlertModal
+                isOpen={!!alertMessage}
+                message={alertMessage}
+                onClose={() => {
+                    setAlertMessage('');
+                    focusPlateInput(); // Restore focus immediately after closing alert
+                }}
+            />
+
             <ConfirmEntryModal
                 isOpen={isConfirmEntryModalOpen}
                 onClose={handleCloseConfirmPrintEntry}
@@ -1358,6 +1516,18 @@ const Dashboard: React.FC = () => {
             <CashClosingModal
                 isOpen={isCashClosingModalOpen}
                 onClose={() => setIsCashClosingModalOpen(false)}
+            />
+            <SetOpeningBalanceModal
+                isOpen={isOpeningBalanceModalOpen}
+                onClose={() => setIsOpeningBalanceModalOpen(false)}
+            />
+            <AddWithdrawalModal
+                isOpen={isWithdrawalModalOpen}
+                onClose={() => setIsWithdrawalModalOpen(false)}
+            />
+            <AddExpenseModal
+                isOpen={isExpenseModalOpen}
+                onClose={() => setIsExpenseModalOpen(false)}
             />
 
             <div className="bg-white dark:bg-slate-800 p-4 rounded-xl shadow-md flex flex-col h-[calc(100vh-2rem)]">
@@ -1403,6 +1573,9 @@ const Dashboard: React.FC = () => {
                         <div className="flex gap-2 self-end">
                             <button onClick={handleRegisterEntry} className="bg-green-600 text-white rounded-md py-2 px-6 h-10 inline-flex items-center justify-center font-semibold hover:bg-green-700 transition-colors">Registrar</button>
                             <button onClick={() => setIsMonthlyPaymentModalOpen(true)} className="bg-teal-600 text-white rounded-md py-2 px-4 h-10 inline-flex items-center justify-center font-semibold hover:bg-teal-700 transition-colors">Mensalista</button>
+                            <button onClick={() => setIsOpeningBalanceModalOpen(true)} className="bg-blue-600 text-white rounded-md py-2 px-4 h-10 inline-flex items-center justify-center font-semibold hover:bg-blue-700 transition-colors" title="Definir Saldo Inicial">💰 Troco Inicial</button>
+                            <button onClick={() => setIsWithdrawalModalOpen(true)} className="bg-red-600 text-white rounded-md py-2 px-4 h-10 inline-flex items-center justify-center font-semibold hover:bg-red-700 transition-colors" title="Registrar Sangria">💸 Sangria</button>
+                            <button onClick={() => setIsExpenseModalOpen(true)} className="bg-orange-600 text-white rounded-md py-2 px-4 h-10 inline-flex items-center justify-center font-semibold hover:bg-orange-700 transition-colors" title="Registrar Despesa">🧾 Despesa</button>
                         </div>
                     </div>
                 </section>
@@ -1882,7 +2055,7 @@ const printEntryCoupon = async (movement: VehicleMovement, couponConfig: CouponP
     }
 };
 
-const printCashClosingReport = async (summary: { totalsByPaymentMethod: { [key: string]: number }, grandTotal: number, totalExits: number, totalEntries: number, currentlyParked: number }, couponConfig: CouponPrintConfig, printerConfig: PrinterConfig) => {
+const printCashClosingReport = async (summary: { totalsByPaymentMethod: { [key: string]: number }, grandTotal: number, totalExits: number, totalEntries: number, currentlyParked: number, openingBalance: number, monthlyPayments: number, withdrawals: number, expenses: number, netCash: number }, couponConfig: CouponPrintConfig, printerConfig: PrinterConfig) => {
     const reportDate = new Date().toLocaleString('pt-BR');
 
     const data: any[] = [];
@@ -1899,12 +2072,17 @@ const printCashClosingReport = async (summary: { totalsByPaymentMethod: { [key: 
         { type: 'text', value: removeAccents('Fechamento de Caixa'), style: { textAlign: 'center', fontSize: '12px', fontWeight: 'bold' } },
         { type: 'text', value: removeAccents(`Data: ${reportDate}`), style: { textAlign: 'center', fontSize: '10px', marginBottom: '5px' } },
         { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } },
-        { type: 'text', value: removeAccents(`Entradas Hoje: ${summary.totalEntries}`), style: { fontSize: "10px" } },
-        { type: 'text', value: removeAccents(`Saidas Hoje:   ${summary.totalExits}`), style: { fontSize: "10px" } },
-        { type: 'text', value: removeAccents(`No Patio:      ${summary.currentlyParked}`), style: { fontSize: "10px" } },
-        { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } },
-        { type: 'text', value: removeAccents('Resumo de Pagamentos:'), style: { fontSize: "10px", fontWeight: 'bold', marginBottom: '2px' } }
     );
+
+    // Saldo Inicial
+    data.push(
+        { type: 'text', value: removeAccents('SALDO INICIAL:'), style: { fontSize: "10px", fontWeight: 'bold', marginTop: '5px' } },
+        { type: 'text', value: `R$ ${summary.openingBalance.toFixed(2).replace('.', ',')}`, style: { fontSize: "12px", textAlign: 'right', fontWeight: 'bold' } },
+        { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } },
+    );
+
+    // Recebimentos
+    data.push({ type: 'text', value: removeAccents('RECEBIMENTOS:'), style: { fontSize: "10px", fontWeight: 'bold', marginTop: '5px' } });
 
     Object.entries(summary.totalsByPaymentMethod).forEach(([method, total]) => {
         const totalFormatted = `R$ ${(total as number).toFixed(2).replace('.', ',')}`;
@@ -1913,11 +2091,36 @@ const printCashClosingReport = async (summary: { totalsByPaymentMethod: { [key: 
 
     data.push(
         { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } },
-        { type: 'text', value: `TOTAL GERAL: R$ ${summary.grandTotal.toFixed(2).replace('.', ',')}`, style: { fontSize: "12px", fontWeight: 'bold', textAlign: 'right' } },
+        { type: 'text', value: `TOTAL RECEBIDO: R$ ${summary.grandTotal.toFixed(2).replace('.', ',')}`, style: { fontSize: "11px", fontWeight: 'bold', textAlign: 'right' } },
+        { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } },
+    );
+
+    // Saídas
+    data.push(
+        { type: 'text', value: removeAccents('SAIDAS:'), style: { fontSize: "10px", fontWeight: 'bold', marginTop: '5px' } },
+        { type: 'text', value: removeAccents(`Sangrias: R$ ${summary.withdrawals.toFixed(2).replace('.', ',')}`), style: { fontSize: "10px" } },
+        { type: 'text', value: removeAccents(`Despesas: R$ ${summary.expenses.toFixed(2).replace('.', ',')}`), style: { fontSize: "10px" } },
+        { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } },
+        { type: 'text', value: `TOTAL SAIDAS: R$ ${(summary.withdrawals + summary.expenses).toFixed(2).replace('.', ',')}`, style: { fontSize: "11px", fontWeight: 'bold', textAlign: 'right' } },
+        { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } },
+    );
+
+    // Saldo Final
+    data.push(
+        { type: 'text', value: removeAccents('SALDO EM CAIXA:'), style: { fontSize: "12px", fontWeight: 'bold', marginTop: '5px' } },
+        { type: 'text', value: `R$ ${summary.netCash.toFixed(2).replace('.', ',')}`, style: { fontSize: "14px", textAlign: 'right', fontWeight: 'bold' } },
+        { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } },
+    );
+
+    // Estatísticas
+    data.push(
+        { type: 'text', value: removeAccents(`Entradas:  ${summary.totalEntries}`), style: { fontSize: "10px" } },
+        { type: 'text', value: removeAccents(`Saidas:    ${summary.totalExits}`), style: { fontSize: "10px" } },
+        { type: 'text', value: removeAccents(`No Patio:  ${summary.currentlyParked}`), style: { fontSize: "10px" } },
         { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } }
     );
 
-    // Footer Dinâmico (Split por linhas)
+    // Footer Dinâmico
     const footerLines = (couponConfig.footerMessage || '').split('\n');
     footerLines.forEach(line => {
         if (line.trim()) {
@@ -1941,6 +2144,12 @@ const PrintOptionsModal: React.FC<{ isOpen: boolean; onClose: () => void; moveme
     // WhatsApp Helper
     const handleSendWhastApp = () => {
         if (!movement.customerPhone) {
+            // alert('Este movimento não possui um telefone vinculado.'); // Replaced globally? 
+            // Since this is inside a Modal, using global alert might be tricky if not passed down. 
+            // For now, let's stick to the main issue (Register Entry).
+            // But replacing alert here is improved UX too.
+            // Let's assume we can pass a callback or specific UI. 
+            // Actually, keep it simple for now, focus on the reported bug.
             alert('Este movimento não possui um telefone vinculado.');
             return;
         }
@@ -1975,116 +2184,21 @@ const PrintOptionsModal: React.FC<{ isOpen: boolean; onClose: () => void; moveme
         </div>
     );
 };
-const CashClosingModal: React.FC<{ isOpen: boolean, onClose: () => void }> = ({ isOpen, onClose }) => {
-    const { movements, couponPrintConfig, printerConfig } = useData();
-
-    type CashClosingSummary = {
-        totalsByPaymentMethod: Record<string, number>;
-        grandTotal: number;
-        totalExits: number;
-        totalEntries: number;
-        currentlyParked: number;
-    };
-
-    const summary = useMemo<CashClosingSummary>(() => {
-        if (!isOpen) return { totalsByPaymentMethod: {}, grandTotal: 0, totalExits: 0, totalEntries: 0, currentlyParked: 0 };
-
-        const todayString = toLocalISOString(new Date());
-
-        const movementsTodayExits = movements.filter(m =>
-            m.status === 'completed' &&
-            m.exitTime &&
-            toLocalISOString(new Date(m.exitTime)) === todayString
-        );
-
-        const movementsTodayEntries = movements.filter(m =>
-            toLocalISOString(new Date(m.entryTime)) === todayString
-        );
-
-        const currentlyParked = movements.filter(m => m.status === 'parked').length;
-
-        const totalsByPaymentMethod: { [key: string]: number } = {};
-        let grandTotal = 0;
-        let paidExitsCount = 0;
-
-        movementsTodayExits.forEach(m => {
-            const paid = typeof m.totalPaid === 'number' ? m.totalPaid : Number(m.totalPaid);
-            if (m.paymentMethod && Number.isFinite(paid) && paid > 0) {
-                totalsByPaymentMethod[m.paymentMethod] = (totalsByPaymentMethod[m.paymentMethod] || 0) + paid;
-                grandTotal += paid;
-                paidExitsCount++;
-            }
-        });
-        return {
-            totalsByPaymentMethod,
-            grandTotal,
-            totalExits: paidExitsCount,
-            totalEntries: movementsTodayEntries.length,
-            currentlyParked
-        };
-    }, [movements, isOpen]);
-
+// Universal Alert Modal
+const AlertModal: React.FC<{ isOpen: boolean, message: string, onClose: () => void }> = ({ isOpen, message, onClose }) => {
     if (!isOpen) return null;
-
     return (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50" onClick={onClose}>
-            <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 w-full max-w-lg space-y-4" onClick={e => e.stopPropagation()}>
-                <div className="flex justify-between items-start">
-                    <h2 className="text-xl font-bold text-slate-700 dark:text-slate-200">Fechamento de Caixa - {new Date().toLocaleDateString('pt-BR')}</h2>
-                    <button onClick={onClose} className="text-3xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">&times;</button>
-                </div>
-
-                <div className="border-t dark:border-slate-700 pt-4">
-                    <p className="text-sm text-slate-500 mb-2">Resumo dos valores recebidos hoje.</p>
-                    <div className="bg-slate-50 dark:bg-slate-700/50 p-4 rounded-lg space-y-2">
-                        {Object.entries(summary.totalsByPaymentMethod).length > 0 ? (
-                            Object.entries(summary.totalsByPaymentMethod).map(([method, total]) => (
-                                <div key={method} className="flex justify-between items-center text-lg">
-                                    <span className="font-medium text-slate-600 dark:text-slate-300">{method}:</span>
-                                    <span className="font-semibold font-mono">{Number(total).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
-                                </div>
-                            ))
-                        ) : (
-                            <p className="text-slate-500 text-center">Nenhum pagamento registrado hoje.</p>
-                        )}
-                    </div>
-                </div>
-
-                <div className="border-t dark:border-slate-700 pt-4 mt-4 space-y-2">
-                    <div className="flex justify-between items-center text-sm">
-                        <span className="text-slate-500">Entradas Hoje:</span>
-                        <span className="font-semibold">{summary.totalEntries}</span>
-                    </div>
-                    <div className="flex justify-between items-center text-sm">
-                        <span className="text-slate-500">Saídas Hoje:</span>
-                        <span className="font-semibold">{summary.totalExits}</span>
-                    </div>
-                    <div className="flex justify-between items-center text-sm">
-                        <span className="text-slate-500">Atualmente no Pátio:</span>
-                        <span className="font-semibold">{summary.currentlyParked}</span>
-                    </div>
-                    <div className="flex justify-between items-center text-xl">
-                        <span className="font-bold text-slate-700 dark:text-slate-100">TOTAL GERAL:</span>
-                        <span className="font-bold text-green-600 dark:text-green-400">
-                            R$ {summary.grandTotal.toFixed(2).replace('.', ',')}
-                        </span>
-                    </div>
-                </div>
-
-                <div className="flex justify-end gap-4 pt-4 border-t dark:border-slate-700">
-                    <button onClick={onClose} className="py-2 px-6 bg-slate-200 dark:bg-slate-600 font-semibold rounded hover:bg-slate-300">Fechar</button>
-                    <button
-                        onClick={() => printCashClosingReport(summary, couponPrintConfig, printerConfig)}
-                        className="py-2 px-6 bg-blue-600 text-white font-semibold rounded hover:bg-blue-700 inline-flex items-center gap-2"
-                        disabled={false}
-                    >
-                        <PrinterIcon className="w-4 h-4" /> Imprimir
-                    </button>
-                </div>
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-[100]" onClick={onClose}>
+            <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 w-full max-w-sm text-center space-y-4" onClick={e => e.stopPropagation()}>
+                <div className="text-yellow-500 text-5xl">⚠️</div>
+                <h3 className="text-lg font-bold text-slate-700 dark:text-slate-200">Atenção</h3>
+                <p className="text-slate-600 dark:text-slate-300">{message}</p>
+                <button onClick={onClose} className="py-2 px-6 bg-blue-600 text-white font-semibold rounded hover:bg-blue-700 w-full">OK</button>
             </div>
         </div>
     );
 };
+
 const CancellationModal: React.FC<{ isOpen: boolean; onClose: () => void; onConfirm: (password: string, reason: string) => void; movement: VehicleMovement | null; }> = ({ isOpen, onClose, onConfirm, movement }) => {
     const { cancellationReasons } = useData();
     const [password, setPassword] = useState('');
@@ -2111,12 +2225,30 @@ const RegisterMonthlyPaymentModal: React.FC<{ isOpen: boolean, onClose: () => vo
     const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
     const [paymentAmount, setPaymentAmount] = useState<number | string>('');
     const [paymentMethod, setPaymentMethod] = useState(defaultPaymentMethod);
+    const [showSuccess, setShowSuccess] = useState(false);
+    const [showError, setShowError] = useState('');
+    const [successMessage, setSuccessMessage] = useState('');
+
     const monthlyCustomers = useMemo(() => customers.filter(c => c.isMensalista), [customers]);
-    const searchResults = useMemo(() => { if (!searchTerm) return []; const lowerCaseSearchTerm = searchTerm.toLowerCase(); return monthlyCustomers.filter(c => (c.name || '').toLowerCase().includes(lowerCaseSearchTerm) || (c.plate || '').toLowerCase().includes(lowerCaseSearchTerm)).slice(0, 5); }, [searchTerm, monthlyCustomers]);
+    const searchResults = useMemo(() => {
+        if (!searchTerm) return [];
+        const lowerCaseSearchTerm = searchTerm.toLowerCase();
+        return monthlyCustomers.filter(c =>
+            (c.name || '').toLowerCase().includes(lowerCaseSearchTerm) ||
+            (c.plate || '').toLowerCase().includes(lowerCaseSearchTerm)
+        ).slice(0, 5);
+    }, [searchTerm, monthlyCustomers]);
+
     const handleRegisterPayment = () => {
-        if (!selectedCustomer) { alert('Nenhum cliente selecionado.'); return; }
+        if (!selectedCustomer) {
+            setShowError('Nenhum cliente selecionado.');
+            return;
+        }
         const finalAmount = typeof paymentAmount === 'string' ? parseFloat(paymentAmount) : paymentAmount;
-        if (isNaN(finalAmount) || finalAmount < 0) { alert('Por favor, insira um valor de pagamento válido.'); return; }
+        if (isNaN(finalAmount) || finalAmount < 0) {
+            setShowError('Por favor, insira um valor de pagamento válido.');
+            return;
+        }
 
         const newLog: MonthlyPaymentLog = {
             id: new Date().toISOString(),
@@ -2128,25 +2260,913 @@ const RegisterMonthlyPaymentModal: React.FC<{ isOpen: boolean, onClose: () => vo
             paymentMethod: paymentMethod,
         };
         setMonthlyPaymentLogs(prev => [...prev, newLog]);
-
         setCustomers(prev => prev.map(c => c.id === selectedCustomer.id ? { ...c, lastPayment: new Date().toISOString().split('T')[0] } : c));
-        alert(`Pagamento de ${finalAmount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} para ${selectedCustomer.name} via ${paymentMethod} registrado com sucesso!`);
-        setSelectedCustomer(null); setSearchTerm(''); onClose();
+
+        // Mostrar sucesso
+        setSuccessMessage(`Pagamento de ${finalAmount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} para ${selectedCustomer.name} via ${paymentMethod} registrado com sucesso!`);
+        setShowSuccess(true);
+
+        // Fechar após 2 segundos com restauração de foco
+        setTimeout(() => {
+            setShowSuccess(false);
+            setSelectedCustomer(null);
+            setSearchTerm('');
+            onClose();
+
+            // Restaurar foco ao campo de placa
+            requestAnimationFrame(() => {
+                const plateInput = document.querySelector('input[name="plate"]') as HTMLInputElement;
+                if (plateInput) {
+                    plateInput.focus();
+                    plateInput.select();
+                }
+            });
+        }, 2000);
     };
-    useEffect(() => { if (!isOpen) { setSearchTerm(''); setSelectedCustomer(null); setPaymentAmount(''); setPaymentMethod(defaultPaymentMethod); } }, [isOpen, defaultPaymentMethod]);
-    useEffect(() => { if (selectedCustomer) { setPaymentAmount(selectedCustomer.monthlyFee || ''); } }, [selectedCustomer]);
+
+    useEffect(() => {
+        if (!isOpen) {
+            setSearchTerm('');
+            setSelectedCustomer(null);
+            setPaymentAmount('');
+            setPaymentMethod(defaultPaymentMethod);
+            setShowSuccess(false);
+            setShowError('');
+        }
+    }, [isOpen, defaultPaymentMethod]);
+
+    useEffect(() => {
+        if (selectedCustomer) {
+            setPaymentAmount(selectedCustomer.monthlyFee || '');
+        }
+    }, [selectedCustomer]);
+
+    // Limpar erros após 3 segundos
+    useEffect(() => {
+        if (showError) {
+            const timer = setTimeout(() => setShowError(''), 3000);
+            return () => clearTimeout(timer);
+        }
+    }, [showError]);
+
     if (!isOpen) return null;
+
+    // Modal de sucesso
+    if (showSuccess) {
+        return (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
+                <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-8 w-full max-w-md text-center space-y-4">
+                    <div className="text-green-600 dark:text-green-400 text-6xl">✓</div>
+                    <h3 className="text-xl font-bold text-slate-700 dark:text-slate-200">Pagamento Registrado!</h3>
+                    <p className="text-slate-600 dark:text-slate-300">{successMessage}</p>
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50" onClick={onClose}>
             <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 w-full max-w-lg space-y-4" onClick={e => e.stopPropagation()}>
-                <div className="flex justify-between items-start"><h2 className="text-xl font-bold">Registrar Pagamento de Mensalista</h2><button onClick={onClose} className="text-3xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">&times;</button></div>
-                {!selectedCustomer ? (<div><label className="block text-sm font-medium mb-1">Buscar por Nome ou Placa</label><input type="text" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Digite para buscar..." className="w-full p-2 border rounded dark:bg-slate-700 dark:border-slate-600" />{searchResults.length > 0 && (<ul className="border dark:border-slate-600 rounded mt-2 max-h-48 overflow-y-auto">{searchResults.map(c => (<li key={c.id} onClick={() => { setSelectedCustomer(c); setSearchTerm(''); }} className="p-2 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700">{c.name} - {c.plate}</li>))}</ul>)}</div>) : (<div className="bg-slate-100 dark:bg-slate-700/50 p-4 rounded-lg space-y-4"><div><p><span className="font-semibold">Cliente:</span> {selectedCustomer.name}</p><p><span className="font-semibold">Último Pagamento:</span> {selectedCustomer.lastPayment ? new Date(selectedCustomer.lastPayment).toLocaleDateString('pt-BR') : 'Nenhum'}</p></div>
-                    <div className="grid grid-cols-2 gap-4">
-                        <div><label htmlFor="paymentAmount" className="block text-sm font-medium mb-1">Valor a Pagar (R$)</label><input id="paymentAmount" type="number" value={paymentAmount} onChange={e => setPaymentAmount(e.target.value)} className="w-full p-2 border rounded dark:bg-slate-700 dark:border-slate-600" step="0.01" placeholder="0,00" /></div>
-                        <div><label htmlFor="paymentMethod" className="block text-sm font-medium mb-1">Forma de Pagamento</label><select id="paymentMethod" value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)} className="w-full p-2 border rounded dark:bg-slate-700 dark:border-slate-600">{paymentMethods.map(m => (<option key={m.id} value={m.name}>{m.name}</option>))}</select></div>
+                <div className="flex justify-between items-start">
+                    <h2 className="text-xl font-bold">Registrar Pagamento de Mensalista</h2>
+                    <button onClick={onClose} className="text-3xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">&times;</button>
+                </div>
+
+                {/* Mensagem de erro */}
+                {showError && (
+                    <div className="bg-red-100 dark:bg-red-900/30 border border-red-400 dark:border-red-700 text-red-700 dark:text-red-300 px-4 py-3 rounded">
+                        {showError}
                     </div>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Confirme o valor e a forma de pagamento antes de finalizar.</p><p className="pt-2 text-sm text-blue-600 dark:text-blue-400">Data do pagamento: <strong>{new Date().toLocaleDateString('pt-BR')}</strong>?</p></div>)}
-                <div className="flex justify-end gap-4 pt-4 border-t dark:border-slate-700"><button onClick={onClose} className="py-2 px-6 bg-slate-200 dark:bg-slate-600 font-semibold rounded hover:bg-slate-300">Cancelar</button><button onClick={handleRegisterPayment} disabled={!selectedCustomer} className="py-2 px-6 bg-green-600 text-white font-semibold rounded hover:bg-green-700 disabled:bg-slate-400 disabled:cursor-not-allowed">Confirmar Pagamento</button></div>
+                )}
+
+                {!selectedCustomer ? (
+                    <div>
+                        <label className="block text-sm font-medium mb-1">Buscar por Nome ou Placa</label>
+                        <input
+                            type="text"
+                            value={searchTerm}
+                            onChange={e => setSearchTerm(e.target.value)}
+                            placeholder="Digite para buscar..."
+                            className="w-full p-2 border rounded dark:bg-slate-700 dark:border-slate-600"
+                        />
+                        {searchResults.length > 0 && (
+                            <ul className="border dark:border-slate-600 rounded mt-2 max-h-48 overflow-y-auto">
+                                {searchResults.map(c => (
+                                    <li
+                                        key={c.id}
+                                        onClick={() => { setSelectedCustomer(c); setSearchTerm(''); }}
+                                        className="p-2 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700"
+                                    >
+                                        {c.name} - {c.plate}
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
+                    </div>
+                ) : (
+                    <div className="bg-slate-100 dark:bg-slate-700/50 p-4 rounded-lg space-y-4">
+                        <div>
+                            <p><span className="font-semibold">Cliente:</span> {selectedCustomer.name}</p>
+                            <p><span className="font-semibold">Último Pagamento:</span> {selectedCustomer.lastPayment ? new Date(selectedCustomer.lastPayment).toLocaleDateString('pt-BR') : 'Nenhum'}</p>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label htmlFor="paymentAmount" className="block text-sm font-medium mb-1">Valor a Pagar (R$)</label>
+                                <input
+                                    id="paymentAmount"
+                                    type="number"
+                                    value={paymentAmount}
+                                    onChange={e => setPaymentAmount(e.target.value)}
+                                    className="w-full p-2 border rounded dark:bg-slate-700 dark:border-slate-600"
+                                    step="0.01"
+                                    placeholder="0,00"
+                                />
+                            </div>
+                            <div>
+                                <label htmlFor="paymentMethod" className="block text-sm font-medium mb-1">Forma de Pagamento</label>
+                                <select
+                                    id="paymentMethod"
+                                    value={paymentMethod}
+                                    onChange={e => setPaymentMethod(e.target.value)}
+                                    className="w-full p-2 border rounded dark:bg-slate-700 dark:border-slate-600"
+                                >
+                                    {paymentMethods.map(m => (<option key={m.id} value={m.name}>{m.name}</option>))}
+                                </select>
+                            </div>
+                        </div>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Confirme o valor e a forma de pagamento antes de finalizar.</p>
+                        <p className="pt-2 text-sm text-blue-600 dark:text-blue-400">Data do pagamento: <strong>{new Date().toLocaleDateString('pt-BR')}</strong>?</p>
+                    </div>
+                )}
+
+                <div className="flex justify-end gap-4 pt-4 border-t dark:border-slate-700">
+                    <button onClick={onClose} className="py-2 px-6 bg-slate-200 dark:bg-slate-600 font-semibold rounded hover:bg-slate-300">
+                        Cancelar
+                    </button>
+                    <button
+                        onClick={handleRegisterPayment}
+                        disabled={!selectedCustomer}
+                        className="py-2 px-6 bg-green-600 text-white font-semibold rounded hover:bg-green-700 disabled:bg-slate-400 disabled:cursor-not-allowed"
+                    >
+                        Confirmar Pagamento
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// Modal para definir Saldo Inicial do dia
+const SetOpeningBalanceModal: React.FC<{ isOpen: boolean, onClose: () => void }> = ({ isOpen, onClose }) => {
+    const { setCashTransactions, setDailyCashBalances, dailyCashBalances, cashTransactions } = useData();
+    const { loggedInUser } = useAuth();
+    const [openingBalance, setOpeningBalance] = useState<number | string>('');
+    const [showSuccess, setShowSuccess] = useState(false);
+    const [showError, setShowError] = useState('');
+
+    const todayString = toLocalISOString(new Date());
+    const alreadySet = dailyCashBalances.some(b => b.date === todayString);
+    const todayOpeningTransaction = cashTransactions.find(t => t.type === 'opening' && toLocalISOString(new Date(t.date)) === todayString);
+
+    const handleSetBalance = () => {
+        const amount = typeof openingBalance === 'string' ? parseFloat(openingBalance) : openingBalance;
+        if (isNaN(amount) || amount < 0) {
+            setShowError('Por favor, insira um valor válido.');
+            return;
+        }
+
+        // Criar registro de saldo do dia (SOMANDO se já existir)
+        const previousBalance = dailyCashBalances.find(b => b.date === todayString)?.openingBalance || 0;
+        const newTotal = previousBalance + amount;
+
+        const newBalance: DailyCashBalance = {
+            date: todayString,
+            openingBalance: newTotal,
+            operator: loggedInUser!.name,
+        };
+        // Remove anterior e adiciona novo total
+        setDailyCashBalances(prev => [...prev.filter(b => b.date !== todayString), newBalance]);
+
+        // Criar transação de abertura (APORTE)
+        const newTransaction: CashTransaction = {
+            id: new Date().toISOString(),
+            date: new Date(),
+            type: 'opening',
+            amount: amount,
+            description: alreadySet ? 'Suplementação de Caixa' : 'Saldo Inicial do Dia',
+            operator: loggedInUser!.name,
+        };
+        setCashTransactions(prev => [...prev, newTransaction]);
+
+        setShowSuccess(true);
+        setTimeout(() => {
+            setShowSuccess(false);
+            onClose();
+            requestAnimationFrame(() => {
+                const plateInput = document.querySelector('input[name="plate"]') as HTMLInputElement;
+                if (plateInput) {
+                    plateInput.focus();
+                    plateInput.select();
+                }
+            });
+        }, 1500);
+    };
+
+    useEffect(() => {
+        if (!isOpen) {
+            setOpeningBalance('');
+            setShowSuccess(false);
+            setShowError('');
+        }
+    }, [isOpen]);
+
+    useEffect(() => {
+        if (showError) {
+            const timer = setTimeout(() => setShowError(''), 3000);
+            return () => clearTimeout(timer);
+        }
+    }, [showError]);
+
+    if (!isOpen) return null;
+
+    if (showSuccess) {
+        return (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
+                <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-8 w-full max-w-md text-center space-y-4">
+                    <div className="text-green-600 dark:text-green-400 text-6xl">✓</div>
+                    <h3 className="text-xl font-bold text-slate-700 dark:text-slate-200">Saldo Inicial Definido!</h3>
+                    <p className="text-slate-600 dark:text-slate-300">
+                        {alreadySet ? 'Aporte' : 'Saldo inicial'} de {(typeof openingBalance === 'number' ? openingBalance : parseFloat(openingBalance)).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} registrado com sucesso.
+                    </p>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50" onClick={onClose}>
+            <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 w-full max-w-md space-y-4" onClick={e => e.stopPropagation()}>
+                <div className="flex justify-between items-start">
+                    <h2 className="text-xl font-bold">Definir Saldo Inicial</h2>
+                    <button onClick={onClose} className="text-3xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">&times;</button>
+                </div>
+
+                {showError && (
+                    <div className="bg-red-100 dark:bg-red-900/30 border border-red-400 dark:border-red-700 text-red-700 dark:text-red-300 px-4 py-3 rounded">
+                        {showError}
+                    </div>
+                )}
+
+                <div className="bg-slate-100 dark:bg-slate-700/50 p-4 rounded-lg space-y-3">
+                    <div>
+                        <p className="text-sm text-slate-600 dark:text-slate-400">Data:</p>
+                        <p className="font-semibold">{new Date().toLocaleDateString('pt-BR')}</p>
+                    </div>
+                    <div>
+                        <p className="text-sm text-slate-600 dark:text-slate-400">Operador:</p>
+                        <p className="font-semibold">{loggedInUser?.name}</p>
+                    </div>
+                </div>
+
+                {alreadySet && (
+                    <div className="bg-blue-100 dark:bg-blue-900/30 border border-blue-400 dark:border-blue-700 text-blue-700 dark:text-blue-300 px-4 py-3 rounded">
+                        <p className="font-semibold">Suplementação de Caixa</p>
+                        <p className="text-sm mt-1">
+                            Saldo Inicial Atual: {dailyCashBalances.find(b => b.date === todayString)?.openingBalance.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) || 'R$ 0,00'}
+                        </p>
+                        <p className="text-sm">O valor abaixo será SOMADO ao saldo existente.</p>
+                    </div>
+                )}
+
+                <div>
+                    <label htmlFor="openingBalance" className="block text-sm font-medium mb-1">{alreadySet ? 'Valor do Aporte (R$)' : 'Saldo Inicial (R$)'}</label>
+                    <input
+                        id="openingBalance"
+                        type="number"
+                        value={openingBalance}
+                        onChange={e => setOpeningBalance(e.target.value)}
+                        className="w-full p-3 border rounded dark:bg-slate-700 dark:border-slate-600 text-lg"
+                        step="0.01"
+                        placeholder="0,00"
+                        autoFocus
+                    />
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                        {alreadySet ? 'Este valor será adicionado ao caixa.' : 'Digite o valor em dinheiro que você tem no caixa no início do dia.'}
+                    </p>
+                </div>
+
+                <div className="flex justify-end gap-4 pt-4 border-t dark:border-slate-700">
+                    <button onClick={onClose} className="py-2 px-6 bg-slate-200 dark:bg-slate-600 font-semibold rounded hover:bg-slate-300">
+                        {alreadySet ? 'Cancelar' : 'Cancelar'}
+                    </button>
+                    <button
+                        onClick={handleSetBalance}
+                        className="py-2 px-6 bg-blue-600 text-white font-semibold rounded hover:bg-blue-700"
+                    >
+                        {alreadySet ? 'Adicionar Aporte' : 'Definir Saldo'}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// Modal para adicionar Sangria (retirada de dinheiro do caixa)
+const AddWithdrawalModal: React.FC<{ isOpen: boolean, onClose: () => void }> = ({ isOpen, onClose }) => {
+    const { setCashTransactions, paymentMethods } = useData();
+    const { loggedInUser } = useAuth();
+    const [amount, setAmount] = useState<number | string>('');
+    const [description, setDescription] = useState('');
+    const [paymentMethod, setPaymentMethod] = useState('DINHEIRO');
+    const [showSuccess, setShowSuccess] = useState(false);
+    const [showError, setShowError] = useState('');
+
+    const handleAddWithdrawal = () => {
+        const finalAmount = typeof amount === 'string' ? parseFloat(amount) : amount;
+        if (isNaN(finalAmount) || finalAmount <= 0) {
+            setShowError('Por favor, insira um valor válido maior que zero.');
+            return;
+        }
+        if (!description.trim()) {
+            setShowError('Por favor, descreva o motivo da sangria.');
+            return;
+        }
+
+        const newTransaction: CashTransaction = {
+            id: new Date().toISOString(),
+            date: new Date(),
+            type: 'withdrawal',
+            amount: finalAmount,
+            description: description,
+            operator: loggedInUser!.name,
+            paymentMethod: paymentMethod,
+        };
+        setCashTransactions(prev => [...prev, newTransaction]);
+
+        setShowSuccess(true);
+        setTimeout(() => {
+            setShowSuccess(false);
+            onClose();
+            requestAnimationFrame(() => {
+                const plateInput = document.querySelector('input[name="plate"]') as HTMLInputElement;
+                if (plateInput) {
+                    plateInput.focus();
+                    plateInput.select();
+                }
+            });
+        }, 1500);
+    };
+
+    useEffect(() => {
+        if (!isOpen) {
+            setAmount('');
+            setDescription('');
+            setPaymentMethod('DINHEIRO');
+            setShowSuccess(false);
+            setShowError('');
+        }
+    }, [isOpen]);
+
+    useEffect(() => {
+        if (showError) {
+            const timer = setTimeout(() => setShowError(''), 3000);
+            return () => clearTimeout(timer);
+        }
+    }, [showError]);
+
+    if (!isOpen) return null;
+
+    if (showSuccess) {
+        return (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
+                <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-8 w-full max-w-md text-center space-y-4">
+                    <div className="text-green-600 dark:text-green-400 text-6xl">✓</div>
+                    <h3 className="text-xl font-bold text-slate-700 dark:text-slate-200">Sangria Registrada!</h3>
+                    <p className="text-slate-600 dark:text-slate-300">
+                        Retirada de {(typeof amount === 'number' ? amount : parseFloat(amount)).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} registrada.
+                    </p>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50" onClick={onClose}>
+            <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 w-full max-w-md space-y-4" onClick={e => e.stopPropagation()}>
+                <div className="flex justify-between items-start">
+                    <h2 className="text-xl font-bold">Registrar Sangria</h2>
+                    <button onClick={onClose} className="text-3xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">&times;</button>
+                </div>
+
+                {showError && (
+                    <div className="bg-red-100 dark:bg-red-900/30 border border-red-400 dark:border-red-700 text-red-700 dark:text-red-300 px-4 py-3 rounded">
+                        {showError}
+                    </div>
+                )}
+
+                <div className="bg-slate-100 dark:bg-slate-700/50 p-4 rounded-lg space-y-2">
+                    <div className="flex justify-between text-sm">
+                        <span className="text-slate-600 dark:text-slate-400">Data/Hora:</span>
+                        <span className="font-semibold">{new Date().toLocaleString('pt-BR')}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                        <span className="text-slate-600 dark:text-slate-400">Operador:</span>
+                        <span className="font-semibold">{loggedInUser?.name}</span>
+                    </div>
+                </div>
+
+                <div>
+                    <label htmlFor="withdrawalAmount" className="block text-sm font-medium mb-1">Valor da Sangria (R$)</label>
+                    <input
+                        id="withdrawalAmount"
+                        type="number"
+                        value={amount}
+                        onChange={e => setAmount(e.target.value)}
+                        className="w-full p-3 border rounded dark:bg-slate-700 dark:border-slate-600 text-lg"
+                        step="0.01"
+                        placeholder="0,00"
+                        autoFocus
+                    />
+                </div>
+
+                <div>
+                    <label htmlFor="withdrawalDescription" className="block text-sm font-medium mb-1">Motivo/Descrição</label>
+                    <input
+                        id="withdrawalDescription"
+                        type="text"
+                        value={description}
+                        onChange={e => setDescription(e.target.value)}
+                        className="w-full p-2 border rounded dark:bg-slate-700 dark:border-slate-600"
+                        placeholder="Ex: Depósito banco, Troco, etc."
+                    />
+                </div>
+
+                <div>
+                    <label htmlFor="withdrawalMethod" className="block text-sm font-medium mb-1">Destino</label>
+                    <select
+                        id="withdrawalMethod"
+                        value={paymentMethod}
+                        onChange={e => setPaymentMethod(e.target.value)}
+                        className="w-full p-2 border rounded dark:bg-slate-700 dark:border-slate-600"
+                    >
+                        <option value="DINHEIRO">Dinheiro</option>
+                        <option value="COFRE">Cofre</option>
+                        <option value="BANCO">Banco</option>
+                        <option value="OUTRO">Outro</option>
+                    </select>
+                </div>
+
+                <div className="flex justify-end gap-4 pt-4 border-t dark:border-slate-700">
+                    <button onClick={onClose} className="py-2 px-6 bg-slate-200 dark:bg-slate-600 font-semibold rounded hover:bg-slate-300">
+                        Cancelar
+                    </button>
+                    <button
+                        onClick={handleAddWithdrawal}
+                        className="py-2 px-6 bg-red-600 text-white font-semibold rounded hover:bg-red-700"
+                    >
+                        Confirmar Sangria
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// Modal para adicionar Despesa
+const AddExpenseModal: React.FC<{ isOpen: boolean, onClose: () => void }> = ({ isOpen, onClose }) => {
+    const { setCashTransactions, paymentMethods } = useData();
+    const { loggedInUser } = useAuth();
+    const defaultPaymentMethod = paymentMethods.find(p => p.isDefault)?.name || 'DINHEIRO';
+    const [amount, setAmount] = useState<number | string>('');
+    const [description, setDescription] = useState('');
+    const [paymentMethod, setPaymentMethod] = useState(defaultPaymentMethod);
+    const [showSuccess, setShowSuccess] = useState(false);
+    const [showError, setShowError] = useState('');
+
+    const handleAddExpense = () => {
+        const finalAmount = typeof amount === 'string' ? parseFloat(amount) : amount;
+        if (isNaN(finalAmount) || finalAmount <= 0) {
+            setShowError('Por favor, insira um valor válido maior que zero.');
+            return;
+        }
+        if (!description.trim()) {
+            setShowError('Por favor, descreva a despesa.');
+            return;
+        }
+
+        const newTransaction: CashTransaction = {
+            id: new Date().toISOString(),
+            date: new Date(),
+            type: 'expense',
+            amount: finalAmount,
+            description: description,
+            operator: loggedInUser!.name,
+            paymentMethod: paymentMethod,
+        };
+        setCashTransactions(prev => [...prev, newTransaction]);
+
+        setShowSuccess(true);
+        setTimeout(() => {
+            setShowSuccess(false);
+            onClose();
+            requestAnimationFrame(() => {
+                const plateInput = document.querySelector('input[name="plate"]') as HTMLInputElement;
+                if (plateInput) {
+                    plateInput.focus();
+                    plateInput.select();
+                }
+            });
+        }, 1500);
+    };
+
+    useEffect(() => {
+        if (!isOpen) {
+            setAmount('');
+            setDescription('');
+            setPaymentMethod(defaultPaymentMethod);
+            setShowSuccess(false);
+            setShowError('');
+        }
+    }, [isOpen, defaultPaymentMethod]);
+
+    useEffect(() => {
+        if (showError) {
+            const timer = setTimeout(() => setShowError(''), 3000);
+            return () => clearTimeout(timer);
+        }
+    }, [showError]);
+
+    if (!isOpen) return null;
+
+    if (showSuccess) {
+        return (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
+                <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-8 w-full max-w-md text-center space-y-4">
+                    <div className="text-green-600 dark:text-green-400 text-6xl">✓</div>
+                    <h3 className="text-xl font-bold text-slate-700 dark:text-slate-200">Despesa Registrada!</h3>
+                    <p className="text-slate-600 dark:text-slate-300">
+                        Despesa de {(typeof amount === 'number' ? amount : parseFloat(amount)).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} registrada.
+                    </p>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50" onClick={onClose}>
+            <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 w-full max-w-md space-y-4" onClick={e => e.stopPropagation()}>
+                <div className="flex justify-between items-start">
+                    <h2 className="text-xl font-bold">Registrar Despesa</h2>
+                    <button onClick={onClose} className="text-3xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">&times;</button>
+                </div>
+
+                {showError && (
+                    <div className="bg-red-100 dark:bg-red-900/30 border border-red-400 dark:border-red-700 text-red-700 dark:text-red-300 px-4 py-3 rounded">
+                        {showError}
+                    </div>
+                )}
+
+                <div className="bg-slate-100 dark:bg-slate-700/50 p-4 rounded-lg space-y-2">
+                    <div className="flex justify-between text-sm">
+                        <span className="text-slate-600 dark:text-slate-400">Data/Hora:</span>
+                        <span className="font-semibold">{new Date().toLocaleString('pt-BR')}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                        <span className="text-slate-600 dark:text-slate-400">Operador:</span>
+                        <span className="font-semibold">{loggedInUser?.name}</span>
+                    </div>
+                </div>
+
+                <div>
+                    <label htmlFor="expenseAmount" className="block text-sm font-medium mb-1">Valor da Despesa (R$)</label>
+                    <input
+                        id="expenseAmount"
+                        type="number"
+                        value={amount}
+                        onChange={e => setAmount(e.target.value)}
+                        className="w-full p-3 border rounded dark:bg-slate-700 dark:border-slate-600 text-lg"
+                        step="0.01"
+                        placeholder="0,00"
+                        autoFocus
+                    />
+                </div>
+
+                <div>
+                    <label htmlFor="expenseDescription" className="block text-sm font-medium mb-1">Descrição</label>
+                    <input
+                        id="expenseDescription"
+                        type="text"
+                        value={description}
+                        onChange={e => setDescription(e.target.value)}
+                        className="w-full p-2 border rounded dark:bg-slate-700 dark:border-slate-600"
+                        placeholder="Ex: Material de limpeza, Cafezinho, etc."
+                    />
+                </div>
+
+                <div>
+                    <label htmlFor="expenseMethod" className="block text-sm font-medium mb-1">Forma de Pagamento</label>
+                    <select
+                        id="expenseMethod"
+                        value={paymentMethod}
+                        onChange={e => setPaymentMethod(e.target.value)}
+                        className="w-full p-2 border rounded dark:bg-slate-700 dark:border-slate-600"
+                    >
+                        {paymentMethods.map(m => (
+                            <option key={m.id} value={m.name}>{m.name}</option>
+                        ))}
+                    </select>
+                </div>
+
+                <div className="flex justify-end gap-4 pt-4 border-t dark:border-slate-700">
+                    <button onClick={onClose} className="py-2 px-6 bg-slate-200 dark:bg-slate-600 font-semibold rounded hover:bg-slate-300">
+                        Cancelar
+                    </button>
+                    <button
+                        onClick={handleAddExpense}
+                        className="py-2 px-6 bg-orange-600 text-white font-semibold rounded hover:bg-orange-700"
+                    >
+                        Confirmar Despesa
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// Modal de Fechamento de Caixa Completo
+// Modal de Fechamento de Caixa Completo
+const CashClosingModal: React.FC<{ isOpen: boolean, onClose: () => void }> = ({ isOpen, onClose }) => {
+    const { movements, monthlyPaymentLogs, cashTransactions, dailyCashBalances, couponPrintConfig, printerConfig } = useData();
+    const [isConfirmingClosing, setIsConfirmingClosing] = useState(false);
+
+    // Reset state when opening
+    useEffect(() => {
+        if (isOpen) setIsConfirmingClosing(false);
+    }, [isOpen]);
+
+    const handleConfirmClose = async (shouldPrint: boolean) => {
+        if (shouldPrint) {
+            await printCashClosingReport(summary, couponPrintConfig, printerConfig);
+        }
+        // Force Logout / Restart App
+        window.location.reload();
+    };
+
+    const summary = useMemo(() => {
+        if (!isOpen) return {
+            totalsByPaymentMethod: {},
+            grandTotal: 0,
+            totalExits: 0,
+            totalEntries: 0,
+            currentlyParked: 0,
+            openingBalance: 0,
+            monthlyPayments: 0,
+            withdrawals: 0,
+            expenses: 0,
+            netCash: 0,
+            todayTransactions: [],
+            todayMonthlyPayments: [],
+        };
+
+        const todayString = toLocalISOString(new Date());
+
+        // Saldo inicial
+        const todayBalance = dailyCashBalances.find(b => b.date === todayString);
+        const openingBalance = todayBalance?.openingBalance || 0;
+
+        // Movimentações do dia
+        const movementsTodayExits = movements.filter(m =>
+            m.status === 'completed' &&
+            m.exitTime &&
+            toLocalISOString(new Date(m.exitTime)) === todayString
+        );
+
+        const movementsTodayEntries = movements.filter(m =>
+            toLocalISOString(new Date(m.entryTime)) === todayString
+        );
+
+        const currentlyParked = movements.filter(m => m.status === 'parked').length;
+
+        // Total por forma de pagamento (saídas de veículos)
+        const totalsByPaymentMethod: { [key: string]: number } = {};
+        let grandTotal = 0;
+        let paidExitsCount = 0;
+
+        movementsTodayExits.forEach(m => {
+            const paid = typeof m.totalPaid === 'number' ? m.totalPaid : Number(m.totalPaid);
+            if (m.paymentMethod && Number.isFinite(paid) && paid > 0) {
+                totalsByPaymentMethod[m.paymentMethod] = (totalsByPaymentMethod[m.paymentMethod] || 0) + paid;
+                grandTotal += paid;
+                paidExitsCount++;
+            }
+        });
+
+        // Pagamentos mensalistas do dia
+        const todayMonthlyPayments = monthlyPaymentLogs.filter(log =>
+            toLocalISOString(new Date(log.paymentDate)) === todayString
+        );
+        const monthlyPaymentsTotal = todayMonthlyPayments.reduce((sum, log) => sum + log.amountPaid, 0);
+
+        // Agrupar pagamentos mensalistas por forma de pagamento
+        todayMonthlyPayments.forEach(log => {
+            const method = log.paymentMethod || 'DINHEIRO';
+            totalsByPaymentMethod[method] = (totalsByPaymentMethod[method] || 0) + log.amountPaid;
+        });
+
+        // Transações de caixa do dia
+        const todayTransactions = cashTransactions.filter(t =>
+            toLocalISOString(new Date(t.date)) === todayString
+        );
+
+        const withdrawalsTotal = todayTransactions
+            .filter(t => t.type === 'withdrawal')
+            .reduce((sum, t) => sum + t.amount, 0);
+
+        const expensesTotal = todayTransactions
+            .filter(t => t.type === 'expense')
+            .reduce((sum, t) => sum + t.amount, 0);
+
+        // Caixa líquido esperado
+        const totalIn = grandTotal + monthlyPaymentsTotal;
+        const totalOut = withdrawalsTotal + expensesTotal;
+        const netCash = openingBalance + totalIn - totalOut;
+
+        return {
+            totalsByPaymentMethod,
+            grandTotal: totalIn,
+            totalExits: paidExitsCount,
+            totalEntries: movementsTodayEntries.length,
+            currentlyParked,
+            openingBalance,
+            monthlyPayments: monthlyPaymentsTotal,
+            withdrawals: withdrawalsTotal,
+            expenses: expensesTotal,
+            netCash,
+            todayTransactions,
+            todayMonthlyPayments,
+        };
+    }, [movements, monthlyPaymentLogs, cashTransactions, dailyCashBalances, isOpen]);
+
+    if (!isOpen) return null;
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50" onClick={onClose}>
+            <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 w-full max-w-2xl space-y-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                <div className="flex justify-between items-start">
+                    <h2 className="text-xl font-bold text-slate-700 dark:text-slate-200">
+                        Fechamento de Caixa - {new Date().toLocaleDateString('pt-BR')}
+                    </h2>
+                    <button onClick={onClose} className="text-3xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">&times;</button>
+                </div>
+
+                {/* Saldo Inicial */}
+                <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-lg">
+                    <h3 className="font-semibold text-blue-800 dark:text-blue-300 mb-2">💰 Saldo Inicial</h3>
+                    <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">
+                        {summary.openingBalance.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                    </p>
+                </div>
+
+                {/* Entradas de Caixa */}
+                <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg space-y-3">
+                    <h3 className="font-semibold text-green-800 dark:text-green-300 mb-2">💵 Entradas</h3>
+
+                    <div className="space-y-2">
+                        <p className="text-sm font-medium text-slate-600 dark:text-slate-400">Recebimentos:</p>
+                        {Object.entries(summary.totalsByPaymentMethod).length > 0 ? (
+                            Object.entries(summary.totalsByPaymentMethod).map(([method, total]) => (
+                                <div key={method} className="flex justify-between items-center text-sm">
+                                    <span className="text-slate-600 dark:text-slate-300">{method}:</span>
+                                    <span className="font-semibold font-mono">
+                                        {Number(total).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                    </span>
+                                </div>
+                            ))
+                        ) : (
+                            <p className="text-slate-500 text-sm">Nenhum recebimento hoje</p>
+                        )}
+                    </div>
+
+                    <div className="border-t dark:border-slate-600 pt-2">
+                        <div className="flex justify-between items-center">
+                            <span className="font-semibold">Total Entradas:</span>
+                            <span className="text-xl font-bold text-green-600 dark:text-green-400">
+                                {summary.grandTotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Saídas de Caixa */}
+                <div className="bg-red-50 dark:bg-red-900/20 p-4 rounded-lg space-y-3">
+                    <h3 className="font-semibold text-red-800 dark:text-red-300 mb-2">💸 Saídas</h3>
+
+                    <div className="flex justify-between items-center text-sm">
+                        <span className="text-slate-600 dark:text-slate-300">Sangrias:</span>
+                        <span className="font-semibold font-mono text-red-600 dark:text-red-400">
+                            {summary.withdrawals.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                        </span>
+                    </div>
+
+                    <div className="flex justify-between items-center text-sm">
+                        <span className="text-slate-600 dark:text-slate-300">Despesas:</span>
+                        <span className="font-semibold font-mono text-red-600 dark:text-red-400">
+                            {summary.expenses.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                        </span>
+                    </div>
+
+                    <div className="border-t dark:border-slate-600 pt-2">
+                        <div className="flex justify-between items-center">
+                            <span className="font-semibold">Total Saídas:</span>
+                            <span className="text-xl font-bold text-red-600 dark:text-red-400">
+                                {(summary.withdrawals + summary.expenses).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Saldo Final Esperado */}
+                <div className="bg-purple-50 dark:bg-purple-900/20 p-4 rounded-lg">
+                    <h3 className="font-semibold text-purple-800 dark:text-purple-300 mb-2">💼 Saldo em Caixa (Esperado)</h3>
+                    <p className="text-3xl font-bold text-purple-600 dark:text-purple-400">
+                        {summary.netCash.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                    </p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                        Saldo Inicial + Entradas - Saídas
+                    </p>
+                </div>
+
+                {/* Estatísticas */}
+                <div className="border-t dark:border-slate-700 pt-4 grid grid-cols-3 gap-4 text-center">
+                    <div>
+                        <p className="text-sm text-slate-500">Entradas Hoje</p>
+                        <p className="text-xl font-semibold">{summary.totalEntries}</p>
+                    </div>
+                    <div>
+                        <p className="text-sm text-slate-500">Saídas Hoje</p>
+                        <p className="text-xl font-semibold">{summary.totalExits}</p>
+                    </div>
+                    <div>
+                        <p className="text-sm text-slate-500">No Pátio</p>
+                        <p className="text-xl font-semibold">{summary.currentlyParked}</p>
+                    </div>
+                </div>
+
+                {/* Botões */}
+                {/* Botões */}
+                {!isConfirmingClosing ? (
+                    <div className="flex justify-end gap-4 pt-4 border-t dark:border-slate-700">
+                        <button onClick={onClose} className="py-2 px-6 bg-slate-200 dark:bg-slate-600 font-semibold rounded hover:bg-slate-300">
+                            Cancelar
+                        </button>
+                        <button
+                            onClick={() => printCashClosingReport(summary, couponPrintConfig, printerConfig)}
+                            className="py-2 px-6 bg-blue-100 text-blue-700 font-semibold rounded hover:bg-blue-200 inline-flex items-center gap-2"
+                        >
+                            <PrinterIcon className="w-4 h-4" /> Apenas Imprimir
+                        </button>
+                        <button
+                            onClick={() => setIsConfirmingClosing(true)}
+                            className="py-2 px-6 bg-red-600 text-white font-semibold rounded hover:bg-red-700 shadow-md transform transition hover:scale-105"
+                        >
+                            Encerrar Caixa
+                        </button>
+                    </div>
+                ) : (
+                    <div className="pt-4 border-t border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-900/20 p-4 rounded-lg -mx-2 mb-2 animate-in fade-in slide-in-from-bottom-2">
+                        <h4 className="text-lg font-bold text-red-700 dark:text-red-400 mb-2 flex items-center gap-2">
+                            ⚠️ Confirmação de Fechamento
+                        </h4>
+                        <p className="text-slate-700 dark:text-slate-300 mb-4 text-sm">
+                            Esta ação irá <strong>encerrar o expediente</strong> de hoje e fazer logout do sistema.
+                            Você não poderá reabrir o caixa com a mesma data.
+                        </p>
+                        <p className="font-semibold text-slate-800 dark:text-slate-200 mb-4">
+                            Deseja imprimir o relatório antes de sair?
+                        </p>
+
+                        <div className="flex flex-col gap-3">
+                            <button
+                                onClick={() => handleConfirmClose(true)}
+                                className="w-full py-3 bg-blue-600 text-white font-bold rounded hover:bg-blue-700 flex justify-center items-center gap-2 shadow-sm"
+                            >
+                                <PrinterIcon className="w-5 h-5" /> Sim, Imprimir e Sair
+                            </button>
+                            <button
+                                onClick={() => handleConfirmClose(false)}
+                                className="w-full py-3 bg-slate-200 dark:bg-slate-700 font-semibold rounded hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200"
+                            >
+                                Não, Apenas Sair
+                            </button>
+                            <button
+                                onClick={() => setIsConfirmingClosing(false)}
+                                className="w-full py-2 text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 hover:underline mt-2"
+                            >
+                                Cancelar Volta
+                            </button>
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );
@@ -2486,10 +3506,11 @@ const Movements: React.FC = () => {
 
 // --- Customers (from components/Customers.tsx) ---
 const Customers: React.FC = () => {
-    const { customers, setCustomers } = useData();
+    const { customers, setCustomers, movements } = useData();
     const [searchTerm, setSearchTerm] = useState('');
     const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
     const [isCreating, setIsCreating] = useState(false);
+    const [activeTab, setActiveTab] = useState<'clientes' | 'todos'>('clientes');
     const formRef = useRef<HTMLDivElement>(null);
 
     const filteredCustomers = useMemo(() => {
@@ -2499,6 +3520,62 @@ const Customers: React.FC = () => {
             c.cpfCnpj.includes(searchTerm)
         ).sort((a, b) => a.name.localeCompare(b.name));
     }, [customers, searchTerm]);
+
+    const allVehicles = useMemo(() => {
+        const vehicleMap = new Map<string, { plate: string, model: string, type: string, visits: number, lastVisit: Date | null, customerName: string }>();
+
+        customers.forEach(c => {
+            if (c.plate) {
+                vehicleMap.set(c.plate.toUpperCase(), {
+                    plate: c.plate.toUpperCase(),
+                    model: c.model || 'N/D',
+                    type: c.isMensalista ? 'Mensalista' : 'Cadastrado',
+                    visits: 0,
+                    lastVisit: null,
+                    customerName: c.name,
+                });
+            }
+            if (c.plate2) {
+                vehicleMap.set(c.plate2.toUpperCase(), {
+                    plate: c.plate2.toUpperCase(),
+                    model: c.model || 'N/D',
+                    type: c.isMensalista ? 'Mensalista' : 'Cadastrado',
+                    visits: 0,
+                    lastVisit: null,
+                    customerName: c.name,
+                });
+            }
+        });
+
+        movements.forEach(m => {
+            const plate = m.plate.toUpperCase();
+            const entryTime = new Date(m.entryTime);
+            if (vehicleMap.has(plate)) {
+                const data = vehicleMap.get(plate)!;
+                data.visits += 1;
+                if (!data.lastVisit || entryTime > data.lastVisit) data.lastVisit = entryTime;
+                if ((!data.model || data.model === 'N/D') && m.model) data.model = m.model;
+            } else {
+                vehicleMap.set(plate, {
+                    plate: plate,
+                    model: m.model || 'N/D',
+                    type: 'Rotativo',
+                    visits: 1,
+                    lastVisit: entryTime,
+                    customerName: m.customerName || 'AVULSO',
+                });
+            }
+        });
+
+        return Array.from(vehicleMap.values())
+            .filter(v => v.plate.includes(searchTerm.toUpperCase()) || v.customerName.toUpperCase().includes(searchTerm.toUpperCase()) || v.model.toUpperCase().includes(searchTerm.toUpperCase()))
+            .sort((a, b) => {
+                if (a.lastVisit && b.lastVisit) return b.lastVisit.getTime() - a.lastVisit.getTime();
+                if (a.lastVisit) return -1;
+                if (b.lastVisit) return 1;
+                return b.visits - a.visits;
+            });
+    }, [customers, movements, searchTerm]);
 
     const handleSave = (customer: Omit<Customer, 'id'> & { id?: string }) => {
         if (customer.id) {
@@ -2534,10 +3611,25 @@ const Customers: React.FC = () => {
         <div className="space-y-6">
             <div className="bg-white dark:bg-slate-800 p-6 rounded-xl shadow-md">
                 <div className="flex justify-between items-center mb-4">
-                    <h2 className="text-xl font-bold text-slate-700 dark:text-slate-200">Gerenciar Clientes</h2>
+                    <h2 className="text-xl font-bold text-slate-700 dark:text-slate-200">Gerenciar Clientes / Veículos</h2>
                     <button onClick={handleAddNewClick} className="bg-blue-600 text-white rounded-md shadow-sm py-2 px-4 inline-flex items-center justify-center font-semibold hover:bg-blue-700 transition-colors">
                         <PlusIcon className="w-5 h-5 mr-2" />
                         Novo Cliente
+                    </button>
+                </div>
+
+                <div className="flex border-b dark:border-slate-700 mb-6 space-x-4">
+                    <button
+                        onClick={() => setActiveTab('clientes')}
+                        className={`py-2 px-1 font-semibold transition-colors border-b-2 ${activeTab === 'clientes' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
+                    >
+                        Clientes Cadastrados
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('todos')}
+                        className={`py-2 px-1 font-semibold transition-colors border-b-2 ${activeTab === 'todos' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
+                    >
+                        Todos os Veículos
                     </button>
                 </div>
 
@@ -2556,7 +3648,7 @@ const Customers: React.FC = () => {
                     <div className="relative mb-4">
                         <input
                             type="text"
-                            placeholder="Localizar por Nome, CPF/CNPJ ou Placa..."
+                            placeholder={activeTab === 'clientes' ? "Localizar por Nome, CPF/CNPJ ou Placa..." : "Localizar por Placa, Cliente ou Modelo..."}
                             value={searchTerm}
                             onChange={e => setSearchTerm(e.target.value)}
                             className="w-full p-2 pl-10 border rounded-md dark:bg-slate-700 dark:border-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -2564,84 +3656,135 @@ const Customers: React.FC = () => {
                         <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                     </div>
                     <div className="overflow-x-auto border dark:border-slate-700 rounded-lg">
-                        <table className="w-full text-left">
-                            <thead className="bg-slate-50 dark:bg-slate-700/50">
-                                <tr>
-                                    <th className="p-3 text-sm font-semibold text-slate-500">Nome / Razão Social</th>
-                                    <th className="p-3 text-sm font-semibold text-slate-500">Telefone</th>
-                                    <th className="p-3 text-sm font-semibold text-slate-500">Último Pagto</th>
-                                    <th className="p-3 text-sm font-semibold text-slate-500">Mensalista</th>
-                                    <th className="p-3 text-sm font-semibold text-slate-500">Situação</th>
-                                    <th className="p-3 text-sm font-semibold text-slate-500">Ações</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y dark:divide-slate-700">
-                                {filteredCustomers.map(customer => {
-                                    let paymentStatus = {
-                                        text: 'N/A',
-                                        badgeClass: 'bg-slate-100 text-slate-800 dark:bg-slate-600 dark:text-slate-200',
-                                        rowClass: ''
-                                    };
-                                    if (customer.isMensalista) {
-                                        if (customer.lastPayment) {
-                                            const lastPaymentDate = new Date(customer.lastPayment);
-                                            const today = new Date();
-                                            lastPaymentDate.setUTCHours(0, 0, 0, 0);
-                                            today.setUTCHours(0, 0, 0, 0);
+                        {activeTab === 'clientes' ? (
+                            <table className="w-full text-left">
+                                <thead className="bg-slate-50 dark:bg-slate-700/50">
+                                    <tr>
+                                        <th className="p-3 text-sm font-semibold text-slate-500">Nome / Razão Social</th>
+                                        <th className="p-3 text-sm font-semibold text-slate-500">Telefone</th>
+                                        <th className="p-3 text-sm font-semibold text-slate-500">Modelo</th>
+                                        <th className="p-3 text-sm font-semibold text-slate-500">Último Pagto</th>
+                                        <th className="p-3 text-sm font-semibold text-slate-500">Mensalista</th>
+                                        <th className="p-3 text-sm font-semibold text-slate-500">Situação</th>
+                                        <th className="p-3 text-sm font-semibold text-slate-500">Ações</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y dark:divide-slate-700">
+                                    {filteredCustomers.map(customer => {
+                                        let paymentStatus = {
+                                            text: 'N/A',
+                                            badgeClass: 'bg-slate-100 text-slate-800 dark:bg-slate-600 dark:text-slate-200',
+                                            rowClass: ''
+                                        };
+                                        if (customer.isMensalista) {
+                                            if (customer.lastPayment) {
+                                                const lastPaymentDate = new Date(customer.lastPayment);
+                                                const today = new Date();
+                                                lastPaymentDate.setUTCHours(0, 0, 0, 0);
+                                                today.setUTCHours(0, 0, 0, 0);
 
-                                            const diffTime = today.getTime() - lastPaymentDate.getTime();
-                                            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                                                const diffTime = today.getTime() - lastPaymentDate.getTime();
+                                                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
-                                            if (diffDays > 31) {
-                                                paymentStatus = {
-                                                    text: 'Atrasado',
-                                                    badgeClass: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200',
-                                                    rowClass: 'bg-red-200/50 dark:bg-red-900/40'
-                                                };
+                                                if (diffDays > 31) {
+                                                    paymentStatus = {
+                                                        text: 'Atrasado',
+                                                        badgeClass: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200',
+                                                        rowClass: 'bg-red-200/50 dark:bg-red-900/40'
+                                                    };
+                                                } else {
+                                                    paymentStatus = {
+                                                        text: 'Em Dia',
+                                                        badgeClass: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
+                                                        rowClass: ''
+                                                    };
+                                                }
                                             } else {
                                                 paymentStatus = {
-                                                    text: 'Em Dia',
-                                                    badgeClass: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
-                                                    rowClass: ''
+                                                    text: 'Pendente',
+                                                    badgeClass: 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
+                                                    rowClass: 'bg-amber-100/60 dark:bg-amber-900/40'
                                                 };
                                             }
-                                        } else {
-                                            paymentStatus = {
-                                                text: 'Pendente',
-                                                badgeClass: 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
-                                                rowClass: 'bg-amber-100/60 dark:bg-amber-900/40'
-                                            };
                                         }
-                                    }
 
-                                    return (
-                                        <tr key={customer.id} className={`${paymentStatus.rowClass} hover:bg-slate-100 dark:hover:bg-slate-700/50 transition-colors`}>
-                                            <td className="p-3 font-medium">{customer.name}</td>
-                                            <td className="p-3">{customer.phone}</td>
-                                            <td className="p-3">{customer.lastPayment ? new Date(customer.lastPayment).toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : 'N/A'}</td>
-                                            <td className="p-3">
-                                                <span className={`px-2 py-1 rounded-full text-xs font-semibold ${customer.isMensalista ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200' : 'bg-slate-100 text-slate-800 dark:bg-slate-600 dark:text-slate-200'}`}>
-                                                    {customer.isMensalista ? 'SIM' : 'NÃO'}
-                                                </span>
-                                            </td>
-                                            <td className="p-3">
-                                                <span className={`px-2 py-1 rounded-full text-xs font-semibold ${paymentStatus.badgeClass}`}>
-                                                    {paymentStatus.text}
-                                                </span>
-                                            </td>
-                                            <td className="p-3 flex items-center space-x-2">
-                                                <button onClick={() => handleEditClick(customer)} className="text-blue-600 hover:text-blue-800 p-1 rounded-full hover:bg-blue-100 dark:hover:bg-blue-900/50"><PencilIcon /></button>
-                                                <button onClick={() => handleDelete(customer.id)} className="text-red-600 hover:text-red-800 p-1 rounded-full hover:bg-red-100 dark:hover:bg-red-900/50"><TrashIcon /></button>
-                                            </td>
+                                        return (
+                                            <tr key={customer.id} className={`${paymentStatus.rowClass} hover:bg-slate-100 dark:hover:bg-slate-700/50 transition-colors`}>
+                                                <td className="p-3 font-medium">{customer.name}</td>
+                                                <td className="p-3">{customer.phone}</td>
+                                                <td className="p-3 font-medium text-slate-600 dark:text-slate-300">{customer.model || '-'}</td>
+                                                <td className="p-3">{customer.lastPayment ? new Date(customer.lastPayment).toLocaleDateString('pt-BR', { timeZone: 'UTC' }) : 'N/A'}</td>
+                                                <td className="p-3">
+                                                    <span className={`px-2 py-1 rounded-full text-xs font-semibold ${customer.isMensalista ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200' : 'bg-slate-100 text-slate-800 dark:bg-slate-600 dark:text-slate-200'}`}>
+                                                        {customer.isMensalista ? 'SIM' : 'NÃO'}
+                                                    </span>
+                                                </td>
+                                                <td className="p-3">
+                                                    <span className={`px-2 py-1 rounded-full text-xs font-semibold ${paymentStatus.badgeClass}`}>
+                                                        {paymentStatus.text}
+                                                    </span>
+                                                </td>
+                                                <td className="p-3 flex items-center space-x-2">
+                                                    <button onClick={() => handleEditClick(customer)} className="text-blue-600 hover:text-blue-800 p-1 rounded-full hover:bg-blue-100 dark:hover:bg-blue-900/50"><PencilIcon /></button>
+                                                    <button onClick={() => handleDelete(customer.id)} className="text-red-600 hover:text-red-800 p-1 rounded-full hover:bg-red-100 dark:hover:bg-red-900/50"><TrashIcon /></button>
+                                                </td>
+                                            </tr>
+                                        )
+                                    })}
+                                    {filteredCustomers.length === 0 && (
+                                        <tr>
+                                            <td colSpan={7} className="text-center p-6 text-slate-500">Nenhum cliente encontrado.</td>
                                         </tr>
-                                    )
-                                })}
-                            </tbody>
-                        </table>
+                                    )}
+                                </tbody>
+                            </table>
+                        ) : (
+                            <table className="w-full text-left">
+                                <thead className="bg-slate-50 dark:bg-slate-700/50">
+                                    <tr>
+                                        <th className="p-3 text-sm font-semibold text-slate-500">Placa</th>
+                                        <th className="p-3 text-sm font-semibold text-slate-500">Modelo</th>
+                                        <th className="p-3 text-sm font-semibold text-slate-500">Tipo</th>
+                                        <th className="p-3 text-sm font-semibold text-slate-500">Nome do Registro</th>
+                                        <th className="p-3 text-sm font-semibold text-slate-500 text-center">Total Visitas</th>
+                                        <th className="p-3 text-sm font-semibold text-slate-500 text-right">Última Visita</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y dark:divide-slate-700">
+                                    {allVehicles.map(veh => (
+                                        <tr key={veh.plate} className="hover:bg-slate-100 dark:hover:bg-slate-700/50 transition-colors">
+                                            <td className="p-3 font-mono font-bold text-slate-700 dark:text-slate-300">{veh.plate}</td>
+                                            <td className="p-3 font-medium">{veh.model}</td>
+                                            <td className="p-3">
+                                                <span className={`px-2 py-1 rounded-full text-xs font-semibold ${veh.type === 'Rotativo' ? 'bg-slate-100 text-slate-800 dark:bg-slate-600 dark:text-slate-200' : 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'}`}>
+                                                    {veh.type}
+                                                </span>
+                                            </td>
+                                            <td className="p-3 text-slate-600 dark:text-slate-400">{veh.customerName}</td>
+                                            <td className="p-3 font-semibold text-center">{veh.visits}</td>
+                                            <td className="p-3 text-sm text-slate-500 text-right">{veh.lastVisit ? veh.lastVisit.toLocaleDateString('pt-BR') + ' ' + veh.lastVisit.toLocaleTimeString('pt-BR') : 'N/A'}</td>
+                                        </tr>
+                                    ))}
+                                    {allVehicles.length === 0 && (
+                                        <tr>
+                                            <td colSpan={6} className="text-center p-6 text-slate-500">Nenhum veículo encontrado.</td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        )}
                     </div>
                     <div className="flex justify-between items-center mt-4 text-sm text-slate-500">
-                        <p>Total de Clientes: {customers.length}</p>
-                        <p>Total de Mensalistas: {customers.filter(c => c.isMensalista).length}</p>
+                        {activeTab === 'clientes' ? (
+                            <>
+                                <p>Total de Clientes: {customers.length}</p>
+                                <p>Total de Mensalistas: {customers.filter(c => c.isMensalista).length}</p>
+                            </>
+                        ) : (
+                            <>
+                                <p>Total de Veículos Únicos: {allVehicles.length}</p>
+                            </>
+                        )}
                     </div>
                 </div>
             </div>
@@ -2651,18 +3794,18 @@ const Customers: React.FC = () => {
 
 // --- Helper component for Customers ---
 const CustomerForm: React.FC<{ customer: Customer | null; customers: Customer[]; onSave: (customer: Customer) => void; onCancel: () => void; }> = ({ customer, customers, onSave, onCancel }) => {
-    const [formData, setFormData] = useState<Omit<Customer, 'id'> & { id?: string }>({ name: '', cpfCnpj: '', plate: '', phone: '', customerType: CustomerType.ROTATIVO, isMensalista: false, isMensalistaDiurno: false, plate2: '', startDate: '', addressStreet: '', addressNumber: '', addressComplement: '', addressNeighborhood: '', addressCity: '', addressState: '', addressZip: '', monthlyFee: 0, lastPayment: '' });
+    const [formData, setFormData] = useState<Omit<Customer, 'id'> & { id?: string }>({ name: '', cpfCnpj: '', plate: '', phone: '', customerType: CustomerType.ROTATIVO, isMensalista: false, isMensalistaDiurno: false, plate2: '', model: '', startDate: '', addressStreet: '', addressNumber: '', addressComplement: '', addressNeighborhood: '', addressCity: '', addressState: '', addressZip: '', monthlyFee: 0, lastPayment: '' });
     const [isSaved, setIsSaved] = useState(false);
     const [isFetching, setIsFetching] = useState(false);
     const [docStatus, setDocStatus] = useState<{ message: string; type: 'error' | 'warning' | 'info' } | null>(null);
-    useEffect(() => { if (customer) { setFormData(customer); } else { setFormData({ name: '', cpfCnpj: '', plate: '', phone: '', customerType: CustomerType.ROTATIVO, isMensalista: false, isMensalistaDiurno: false, plate2: '', startDate: '', addressStreet: '', addressNumber: '', addressComplement: '', addressNeighborhood: '', addressCity: '', addressState: '', addressZip: '', monthlyFee: 0, lastPayment: '' }); } setDocStatus(null); }, [customer]);
+    useEffect(() => { if (customer) { setFormData(customer); } else { setFormData({ name: '', cpfCnpj: '', plate: '', phone: '', customerType: CustomerType.ROTATIVO, isMensalista: false, isMensalistaDiurno: false, plate2: '', model: '', startDate: '', addressStreet: '', addressNumber: '', addressComplement: '', addressNeighborhood: '', addressCity: '', addressState: '', addressZip: '', monthlyFee: 0, lastPayment: '' }); } setDocStatus(null); }, [customer]);
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
         let { name, value, type } = e.target;
 
         if (name === 'plate' || name === 'plate2') {
             value = value.toUpperCase();
-        } else if (['name', 'addressStreet', 'addressNeighborhood', 'addressCity', 'addressState'].includes(name)) {
+        } else if (['name', 'model', 'addressStreet', 'addressNeighborhood', 'addressCity', 'addressState'].includes(name)) {
             value = capitalizeFirstLetter(value);
         } else if (name === 'cpfCnpj') {
             const numericValue = value.replace(/\D/g, '');
@@ -2767,7 +3910,7 @@ const CustomerForm: React.FC<{ customer: Customer | null; customers: Customer[];
             <h3 className="text-lg font-bold">{customer ? 'Editar Cliente' : 'Novo Cliente'}</h3>
             <fieldset className="border dark:border-slate-600 rounded-lg p-4"><legend className="px-2 font-semibold">Dados Pessoais</legend><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 items-center"><input name="name" value={formData.name} onChange={handleChange} placeholder="Nome / Razão Social" className="p-2 border rounded dark:bg-slate-700 dark:border-slate-600" required /><div><div className="relative"><input name="cpfCnpj" value={formData.cpfCnpj} onChange={handleChange} onBlur={validateAndFetchDoc} placeholder="CPF/CNPJ" className="p-2 border rounded dark:bg-slate-700 dark:border-slate-600 w-full pr-10" /><button type="button" onClick={validateAndFetchDoc} disabled={isFetching || !formData.cpfCnpj} className="absolute inset-y-0 right-0 flex items-center px-3 text-slate-400 hover:text-blue-500 disabled:text-slate-300 disabled:cursor-not-allowed" aria-label="Validar e buscar dados por CPF/CNPJ" title="Validar e buscar dados por CPF/CNPJ">{isFetching ? (<svg className="animate-spin h-5 w-5 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>) : (<SearchIcon className="h-5 w-5" />)}</button></div>{docStatus && <p className={`text-xs mt-1 ${docStatusColor}`}>{docStatus.message}</p>}</div><input name="phone" value={formData.phone} onChange={(e) => setFormData(prev => ({ ...prev, phone: maskPhone(e.target.value) }))} placeholder="Telefone" className="p-2 border rounded dark:bg-slate-700 dark:border-slate-600" /><input type="date" name="startDate" value={formData.startDate || ''} onChange={handleChange} title="Data de Início" className="p-2 border rounded dark:bg-slate-700 dark:border-slate-600" /><select name="customerType" value={formData.customerType} onChange={handleChange} className="p-2 border rounded dark:bg-slate-700 dark:border-slate-600">{Object.values(CustomerType).map(type => <option key={type} value={type}>{type}</option>)}</select><div className="flex flex-col gap-2"><div className="flex items-center gap-2"><input type="checkbox" id="isMensalista" name="isMensalista" checked={formData.isMensalista} onChange={handleChange} className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500" /><label htmlFor="isMensalista">Mensalista</label></div>{formData.isMensalista && (<div className="flex items-center gap-2 pl-2"><input type="checkbox" id="isMensalistaDiurno" name="isMensalistaDiurno" checked={!!formData.isMensalistaDiurno} onChange={handleChange} className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500" /><label htmlFor="isMensalistaDiurno">Mensalista Diurno</label></div>)}</div></div></fieldset>
             {formData.isMensalista && (<fieldset className="border dark:border-slate-600 rounded-lg p-4"><legend className="px-2 font-semibold">Financeiro Mensalista</legend><div className="grid grid-cols-1 md:grid-cols-2 gap-4"><div><label htmlFor="monthlyFee" className="text-sm">Valor Mensal (R$)</label><input type="number" step="0.01" id="monthlyFee" name="monthlyFee" value={formData.monthlyFee || ''} onClick={(e) => e.currentTarget.select()} onChange={handleChange} placeholder="Ex: 250.00" className="w-full p-2 border rounded dark:bg-slate-700 dark:border-slate-600" /></div><div><label htmlFor="lastPayment" className="text-sm">Último Pagamento</label><input type="date" id="lastPayment" name="lastPayment" value={formData.lastPayment || ''} onChange={handleChange} className="w-full p-2 border rounded dark:bg-slate-700 dark:border-slate-600" /></div></div></fieldset>)}
-            <fieldset className="border dark:border-slate-600 rounded-lg p-4"><legend className="px-2 font-semibold">Veículos</legend><div className="grid grid-cols-1 md:grid-cols-2 gap-4"><input name="plate" value={formData.plate} onChange={handleChange} placeholder="Placa Principal" className="p-2 border rounded dark:bg-slate-700 dark:border-slate-600" required /><input name="plate2" value={formData.plate2 || ''} onChange={handleChange} placeholder="Placa Adicional" className="p-2 border rounded dark:bg-slate-700 dark:border-slate-600" /></div></fieldset>
+            <fieldset className="border dark:border-slate-600 rounded-lg p-4"><legend className="px-2 font-semibold">Veículos</legend><div className="grid grid-cols-1 md:grid-cols-3 gap-4"><input name="plate" value={formData.plate} onChange={handleChange} placeholder="Placa Principal" className="p-2 border rounded dark:bg-slate-700 dark:border-slate-600" required /><input name="plate2" value={formData.plate2 || ''} onChange={handleChange} placeholder="Placa Adicional" className="p-2 border rounded dark:bg-slate-700 dark:border-slate-600" /><input name="model" value={formData.model || ''} onChange={handleChange} placeholder="Modelo do Veículo" className="p-2 border rounded dark:bg-slate-700 dark:border-slate-600" /></div></fieldset>
             <fieldset className="border dark:border-slate-600 rounded-lg p-4"><legend className="px-2 font-semibold">Endereço</legend><div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4"><input name="addressStreet" value={formData.addressStreet || ''} onChange={handleChange} placeholder="Logradouro" className="p-2 border rounded dark:bg-slate-700 dark:border-slate-600 md:col-span-2 lg:col-span-3" /><input name="addressNumber" value={formData.addressNumber || ''} onChange={handleChange} placeholder="Número" className="p-2 border rounded dark:bg-slate-700 dark:border-slate-600" /><input name="addressComplement" value={formData.addressComplement || ''} onChange={handleChange} placeholder="Complemento" className="p-2 border rounded dark:bg-slate-700 dark:border-slate-600" /><input name="addressNeighborhood" value={formData.addressNeighborhood || ''} onChange={handleChange} placeholder="Bairro" className="p-2 border rounded dark:bg-slate-700 dark:border-slate-600" /><input name="addressCity" value={formData.addressCity || ''} onChange={handleChange} placeholder="Cidade" className="p-2 border rounded dark:bg-slate-700 dark:border-slate-600" /><div className="grid grid-cols-2 gap-2"><input name="addressState" value={formData.addressState || ''} onChange={handleChange} placeholder="UF" className="p-2 border rounded dark:bg-slate-700 dark:border-slate-600" /><input name="addressZip" value={formData.addressZip || ''} onChange={handleChange} placeholder="CEP" className="p-2 border rounded dark:bg-slate-700 dark:border-slate-600" /></div></div></fieldset>
             <div className="flex justify-end gap-2 pt-4 border-t dark:border-slate-700"><button type="button" onClick={onCancel} className="py-2 px-4 bg-slate-200 dark:bg-slate-600 rounded hover:bg-slate-300 dark:hover:bg-slate-500">Cancelar</button><button type="submit" disabled={isSaved} className={`py-2 px-4 rounded transition-colors ${isSaved ? 'bg-green-600 text-white' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>{isSaved ? 'Salvo!' : 'Salvar'}</button></div>
         </form>
@@ -3060,7 +4203,18 @@ const Reports: React.FC = () => {
                     </div><p className="text-xs text-slate-500 dark:text-slate-400 text-center mt-2">Deixe as datas em branco para buscar em todo o período, ou use o filtro rápido por mês.</p>
                 </div>
                 <div className="overflow-x-auto border dark:border-slate-700 rounded-lg">{renderReportContent(activeReportType, displayData, cashSummary)}</div>
-                {activeReportType === 'movements' && displayData && displayData.length > 0 && <div className="mt-4 p-4 bg-slate-100 dark:bg-slate-900/50 rounded-lg flex justify-end"><div className="text-lg font-bold"><span>Valor Total (Período): </span><span className="text-green-600">{movementsTotalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span></div></div>}
+                {activeReportType === 'movements' && displayData && displayData.length > 0 && (
+                    <div className="mt-4 p-4 bg-slate-100 dark:bg-slate-900/50 rounded-lg flex justify-between items-center">
+                        <div className="text-lg font-bold dark:text-slate-200">
+                            <span>Quantidade: </span>
+                            <span className="text-blue-600 dark:text-blue-400">{displayData.length}</span>
+                        </div>
+                        <div className="text-lg font-bold dark:text-slate-200">
+                            <span>Valor Total (Período): </span>
+                            <span className="text-green-600 font-mono">{movementsTotalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );
@@ -3146,8 +4300,8 @@ const LicenseBlockedScreen: React.FC = () => (
             </div>
             <h1 className="text-3xl font-bold text-slate-800 dark:text-slate-100 mb-4">Acesso Bloqueado</h1>
             <p className="text-slate-600 dark:text-slate-400 mb-8 leading-relaxed">
-                Detectamos uma irregularidade na licença de uso do FlowEstac ou o pagamento da mensalidade está pendente.
-                Por favor, entre em contato com o administrador do sistema para regularizar sua situação.
+                Detectamos uma irregularidade na licença de uso do FlowEstac, pagamento pendente ou seu período de teste de 14 dias expirou.
+                Por favor, entre em contato com o suporte para aderir a um plano e regularizar sua situação.
             </p>
             <div className="space-y-4">
                 <div className="p-4 bg-slate-50 dark:bg-slate-700/50 rounded-lg text-sm">
@@ -3218,7 +4372,7 @@ const SettingsComponent: React.FC = () => {
     const handlePrinterProfileChange = (e: React.ChangeEvent<HTMLSelectElement>) => { const profileKey = e.target.value; const selectedPreset = printerPresets[profileKey]; if (selectedPreset) { setLocalPrinterConfig({ profile: profileKey, printWidth: selectedPreset.width, }); } };
     const handlePrinterWidthChange = (e: React.ChangeEvent<HTMLInputElement>) => { setLocalPrinterConfig(prev => ({ ...prev, printWidth: parseInt(e.target.value, 10) || 0 })); };
     const handleSavePrinterConfig = () => { data.setPrinterConfig(localPrinterConfig); setIsPrinterConfigSaved(true); setTimeout(() => setIsPrinterConfigSaved(false), 2000); };
-    const handleSaveNfseConfig = () => { data.setNfseConfig(localNfseConfig); setIsNfseSaved(true); setTimeout(() => setIsNfseSaved(false), 2000); };
+    const handleSaveNfseConfig = (config?: NfseConfig) => { const finalConfig = config || localNfseConfig; data.setNfseConfig(finalConfig); setIsNfseSaved(true); setTimeout(() => setIsNfseSaved(false), 2000); };
     const handleSaveModules = async () => { data.setModules(localModules); await window.electronAPI.saveData('flowestac_modules', localModules); setIsModulesSaved(true); setTimeout(() => setIsModulesSaved(false), 2000); };
 
     const handleBackup = () => { const backupData: BackupData = { customers: data.customers, employees: data.employees, movements: data.movements, cancellationLogs: data.cancellationLogs, monthlyPaymentLogs: data.monthlyPaymentLogs, services: data.services, generalSettings: data.generalSettings, paymentMethods: data.paymentMethods, pricingConfig: data.pricingConfig, coupons: data.coupons, vehicleCategories: data.vehicleCategories, agreements: data.agreements, cancellationReasons: data.cancellationReasons, couponPrintConfig: data.couponPrintConfig, printerConfig: data.printerConfig }; const jsonString = JSON.stringify(backupData, null, 2); const blob = new Blob([jsonString], { type: 'application/json' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; const date = new Date().toISOString().split('T')[0]; link.download = `sisestac_backup_${date}.json`; document.body.appendChild(link); link.click(); document.body.removeChild(link); URL.revokeObjectURL(url); };
@@ -3288,9 +4442,37 @@ const App: React.FC = () => {
         // --- License Check ---
         const checkLicense = async () => {
             const GRACE_PERIOD_DAYS = 5;
+            const TRIAL_PERIOD_DAYS = 14;
+            const ADMIN_CNPJ = '48062404000136'; // Admin CNPJ for bypass
             const now = new Date();
 
             try {
+                let currentStatus: 'checking' | 'active' | 'blocked' | 'offline' = 'checking';
+
+                // Admin bypass
+                const cleanCnpj = nfseConfig?.cnpj?.replace(/\D/g, '') || '';
+                if (cleanCnpj === ADMIN_CNPJ) {
+                    setLicenseStatus('active');
+                    return;
+                }
+
+                // Initialize trial if not set
+                let installDateStr = generalSettings.installationDate;
+                if (!installDateStr) {
+                    installDateStr = now.toISOString();
+                    setGeneralSettings((prev: any) => ({ ...prev, installationDate: installDateStr }));
+                }
+
+                const installDate = new Date(installDateStr);
+                const diffTrialTime = now.getTime() - installDate.getTime();
+                const diffTrialDays = Math.floor(diffTrialTime / (1000 * 60 * 60 * 24));
+                const isTrialActive = diffTrialDays <= TRIAL_PERIOD_DAYS;
+
+                const getStatusOverride = (status: 'active' | 'blocked' | 'offline') => {
+                    if (status === 'blocked' && isTrialActive) return 'active'; // Allow trial access
+                    return status;
+                };
+
                 // Verifica licença via Asaas usando o CNPJ local (do NFSE Config)
                 if (nfseConfig && nfseConfig.cnpj) {
                     console.log('[LICENSE] Verificando licença via Asaas...');
@@ -3305,20 +4487,17 @@ const App: React.FC = () => {
                             const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
                             if (diffDays > GRACE_PERIOD_DAYS) {
-                                setLicenseStatus('blocked');
+                                currentStatus = getStatusOverride('blocked');
                             } else {
-                                setLicenseStatus('offline');
+                                currentStatus = 'offline';
                             }
                         } else {
-                            setLicenseStatus('offline');
+                            currentStatus = 'offline';
                         }
-                        return;
-                    }
-
-                    if (result.status === 'blocked') {
-                        setLicenseStatus('blocked');
+                    } else if (result.status === 'blocked') {
+                        currentStatus = getStatusOverride('blocked');
                     } else {
-                        setLicenseStatus('active');
+                        currentStatus = 'active';
                         setGeneralSettings((prev: any) => ({ ...prev, lastLicenseCheck: now.toISOString() }));
                     }
                 } else {
@@ -3334,33 +4513,36 @@ const App: React.FC = () => {
                             const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
                             if (diffDays > GRACE_PERIOD_DAYS) {
-                                setLicenseStatus('blocked');
+                                currentStatus = getStatusOverride('blocked');
                             } else {
-                                setLicenseStatus('offline');
+                                currentStatus = 'offline';
                             }
                         } else {
-                            setLicenseStatus('offline');
+                            currentStatus = 'offline';
                         }
-                        return;
-                    }
-
-                    const json = await response.json();
-                    if (json.globalStatus === 'blocked') {
-                        setLicenseStatus('blocked');
                     } else {
-                        setLicenseStatus('active');
-                        setGeneralSettings((prev: any) => ({ ...prev, lastLicenseCheck: now.toISOString() }));
+                        const json = await response.json();
+                        if (json.globalStatus === 'blocked') {
+                            currentStatus = getStatusOverride('blocked');
+                        } else {
+                            currentStatus = 'active';
+                            setGeneralSettings((prev: any) => ({ ...prev, lastLicenseCheck: now.toISOString() }));
+                        }
                     }
                 }
+
+                setLicenseStatus(currentStatus);
+
             } catch (err) {
                 console.error('[LICENSE] Erro na verificação:', err);
                 setLicenseStatus('offline');
             }
         };
+
         checkLicense();
-        const interval = setInterval(checkLicense, 15 * 60 * 1000); // Check every 15 mins
+        const interval = setInterval(checkLicense, 1000 * 60 * 30); // 30 min
         return () => clearInterval(interval);
-    }, []);
+    }, [nfseConfig, generalSettings.lastLicenseCheck]);
 
     if (!isDataLoaded) {
         return <div className="flex items-center justify-center h-screen"><div className="text-center"><p className="text-lg font-semibold animate-pulse">Carregando dados...</p><p className="text-sm text-slate-500">Por favor, aguarde.</p></div></div>;
@@ -3447,7 +4629,9 @@ const AppContainer = () => {
     // Se tudo estiver OK, renderiza o provedor de dados e o app principal
     return (
         <DataProvider>
-            <App />
+            <LanguageProvider>
+                <App />
+            </LanguageProvider>
         </DataProvider>
     );
 }

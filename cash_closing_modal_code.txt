@@ -1,0 +1,221 @@
+// Modal de Fechamento de Caixa - INSERIR APÓS AddExpenseModal (aprox. linha 2836)
+const CashClosingModal: React.FC<{ isOpen: boolean, onClose: () => void }> = ({ isOpen, onClose }) => {
+    const { movements, monthlyPaymentLogs, cashTransactions, dailyCashBalances, couponPrintConfig, printerConfig } = useData();
+
+    const summary = useMemo(() => {
+        if (!isOpen) return {
+            totalsByPaymentMethod: {},
+            grandTotal: 0,
+            totalExits: 0,
+            totalEntries: 0,
+            currentlyParked: 0,
+            openingBalance: 0,
+            monthlyPayments: 0,
+            withdrawals: 0,
+            expenses: 0,
+            netCash: 0,
+            todayTransactions: [],
+            todayMonthlyPayments: [],
+        };
+
+        const todayString = toLocalISOString(new Date());
+
+        // Saldo inicial
+        const todayBalance = dailyCashBalances.find(b => b.date === todayString);
+        const openingBalance = todayBalance?.openingBalance || 0;
+
+        // Movimentações do dia
+        const movementsTodayExits = movements.filter(m =>
+            m.status === 'completed' &&
+            m.exitTime &&
+            toLocalISOString(new Date(m.exitTime)) === todayString
+        );
+
+        const movementsTodayEntries = movements.filter(m =>
+            toLocalISOString(new Date(m.entryTime)) === todayString
+        );
+
+        const currentlyParked = movements.filter(m => m.status === 'parked').length;
+
+        // Total por forma de pagamento (saídas de veículos)
+        const totalsByPaymentMethod: { [key: string]: number } = {};
+        let grandTotal = 0;
+        let paidExitsCount = 0;
+
+        movementsTodayExits.forEach(m => {
+            const paid = typeof m.totalPaid === 'number' ? m.totalPaid : Number(m.totalPaid);
+            if (m.paymentMethod && Number.isFinite(paid) && paid > 0) {
+                totalsByPaymentMethod[m.paymentMethod] = (totalsByPaymentMethod[m.paymentMethod] || 0) + paid;
+                grandTotal += paid;
+                paidExitsCount++;
+            }
+        });
+
+        // Pagamentos mensalistas do dia
+        const todayMonthlyPayments = monthlyPaymentLogs.filter(log =>
+            toLocalISOString(new Date(log.paymentDate)) === todayString
+        );
+        const monthlyPaymentsTotal = todayMonthlyPayments.reduce((sum, log) => sum + log.amountPaid, 0);
+
+        // Agrupar pagamentos mensalistas por forma de pagamento
+        todayMonthlyPayments.forEach(log => {
+            const method = log.paymentMethod || 'DINHEIRO';
+            totalsByPaymentMethod[method] = (totalsByPaymentMethod[method] || 0) + log.amountPaid;
+        });
+
+        // Transações de caixa do dia
+        const todayTransactions = cashTransactions.filter(t =>
+            toLocalISOString(new Date(t.date)) === todayString
+        );
+
+        const withdrawalsTotal = todayTransactions
+            .filter(t => t.type === 'withdrawal')
+            .reduce((sum, t) => sum + t.amount, 0);
+
+        const expensesTotal = todayTransactions
+            .filter(t => t.type === 'expense')
+            .reduce((sum, t) => sum + t.amount, 0);
+
+        // Caixa líquido esperado
+        const totalIn = grandTotal + monthlyPaymentsTotal;
+        const totalOut = withdrawalsTotal + expensesTotal;
+        const netCash = openingBalance + totalIn - totalOut;
+
+        return {
+            totalsByPaymentMethod,
+            grandTotal: totalIn,
+            totalExits: paidExitsCount,
+            totalEntries: movementsTodayEntries.length,
+            currentlyParked,
+            openingBalance,
+            monthlyPayments: monthlyPaymentsTotal,
+            withdrawals: withdrawalsTotal,
+            expenses: expensesTotal,
+            netCash,
+            todayTransactions,
+            todayMonthlyPayments,
+        };
+    }, [movements, monthlyPaymentLogs, cashTransactions, dailyCashBalances, isOpen]);
+
+    if (!isOpen) return null;
+
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50" onClick={onClose}>
+            <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl p-6 w-full max-w-2xl space-y-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                <div className="flex justify-between items-start">
+                    <h2 className="text-xl font-bold text-slate-700 dark:text-slate-200">
+                        Fechamento de Caixa - {new Date().toLocaleDateString('pt-BR')}
+                    </h2>
+                    <button onClick={onClose} className="text-3xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">&times;</button>
+                </div>
+
+                {/* Saldo Inicial */}
+                <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-lg">
+                    <h3 className="font-semibold text-blue-800 dark:text-blue-300 mb-2">💰 Saldo Inicial</h3>
+                    <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">
+                        {summary.openingBalance.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                    </p>
+                </div>
+
+                {/* Entradas de Caixa */}
+                <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg space-y-3">
+                    <h3 className="font-semibold text-green-800 dark:text-green-300 mb-2">💵 Entradas</h3>
+                    
+                    {/* Vendas por forma de pagamento */}
+                    <div className="space-y-2">
+                        <p className="text-sm font-medium text-slate-600 dark:text-slate-400">Recebimentos:</p>
+                        {Object.entries(summary.totalsByPaymentMethod).length > 0 ? (
+                            Object.entries(summary.totalsByPaymentMethod).map(([method, total]) => (
+                                <div key={method} className="flex justify-between items-center text-sm">
+                                    <span className="text-slate-600 dark:text-slate-300">{method}:</span>
+                                    <span className="font-semibold font-mono">
+                                        {Number(total).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                    </span>
+                                </div>
+                            ))
+                        ) : (
+                            <p className="text-slate-500 text-sm">Nenhum recebimento hoje</p>
+                        )}
+                    </div>
+
+                    <div className="border-t dark:border-slate-600 pt-2">
+                        <div className="flex justify-between items-center">
+                            <span className="font-semibold">Total Entradas:</span>
+                            <span className="text-xl font-bold text-green-600 dark:text-green-400">
+                                {summary.grandTotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Saídas de Caixa */}
+                <div className="bg-red-50 dark:bg-red-900/20 p-4 rounded-lg space-y-3">
+                    <h3 className="font-semibold text-red-800 dark:text-red-300 mb-2">💸 Saídas</h3>
+                    
+                    <div className="flex justify-between items-center text-sm">
+                        <span className="text-slate-600 dark:text-slate-300">Sangrias:</span>
+                        <span className="font-semibold font-mono text-red-600 dark:text-red-400">
+                            {summary.withdrawals.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                        </span>
+                    </div>
+                    
+                    <div className="flex justify-between items-center text-sm">
+                        <span className="text-slate-600 dark:text-slate-300">Despesas:</span>
+                        <span className="font-semibold font-mono text-red-600 dark:text-red-400">
+                            {summary.expenses.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                        </span>
+                    </div>
+
+                    <div className="border-t dark:border-slate-600 pt-2">
+                        <div className="flex justify-between items-center">
+                            <span className="font-semibold">Total Saídas:</span>
+                            <span className="text-xl font-bold text-red-600 dark:text-red-400">
+                                {(summary.withdrawals + summary.expenses).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Saldo Final Esperado */}
+                <div className="bg-purple-50 dark:bg-purple-900/20 p-4 rounded-lg">
+                    <h3 className="font-semibold text-purple-800 dark:text-purple-300 mb-2">💼 Saldo em Caixa (Esperado)</h3>
+                    <p className="text-3xl font-bold text-purple-600 dark:text-purple-400">
+                        {summary.netCash.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                    </p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                        Saldo Inicial + Entradas - Saídas
+                    </p>
+                </div>
+
+                {/* Estatísticas */}
+                <div className="border-t dark:border-slate-700 pt-4 grid grid-cols-3 gap-4 text-center">
+                    <div>
+                        <p className="text-sm text-slate-500">Entradas Hoje</p>
+                        <p className="text-xl font-semibold">{summary.totalEntries}</p>
+                    </div>
+                    <div>
+                        <p className="text-sm text-slate-500">Saídas Hoje</p>
+                        <p className="text-xl font-semibold">{summary.totalExits}</p>
+                    </div>
+                    <div>
+                        <p className="text-sm text-slate-500">No Pátio</p>
+                        <p className="text-xl font-semibold">{summary.currentlyParked}</p>
+                    </div>
+                </div>
+
+                {/* Botões */}
+                <div className="flex justify-end gap-4 pt-4 border-t dark:border-slate-700">
+                    <button onClick={onClose} className="py-2 px-6 bg-slate-200 dark:bg-slate-600 font-semibold rounded hover:bg-slate-300">
+                        Fechar
+                    </button>
+                    <button
+                        onClick={() => printCashClosingReport(summary, couponPrintConfig, printerConfig)}
+                        className="py-2 px-6 bg-blue-600 text-white font-semibold rounded hover:bg-blue-700 inline-flex items-center gap-2"
+                    >
+                        <PrinterIcon className="w-4 h-4" /> Imprimir
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};

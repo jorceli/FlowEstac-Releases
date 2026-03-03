@@ -6,7 +6,7 @@ const { exec } = require('child_process');
 const escpos = require('escpos');
 escpos.USB = require('escpos-usb');
 
-// ObtÃ©m o caminho para a pasta 'Documentos' do usuÃ¡rio e cria o diretÃ³rio de dados do FlowEstac.
+// Obtém o caminho para a pasta 'Documentos' do usuário e cria o diretório de dados do FlowEstac.
 const dataPath = path.join(app.getPath('documents'), 'FlowEstacData');
 if (!fs.existsSync(dataPath)) {
   fs.mkdirSync(dataPath, { recursive: true });
@@ -23,7 +23,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
     },
-    icon: path.join(__dirname, 'assets/icon.png') // Futuro Ã­cone da aplicaÃ§Ã£o
+    icon: path.join(__dirname, 'assets/icon.png') // Futuro ícone da aplicação
   });
 
   const builtIndex = path.join(__dirname, 'renderer', 'index.html');
@@ -33,7 +33,7 @@ function createWindow() {
     win.loadFile('index.html');
   }
 
-  // Remove o menu padrÃ£o (File, Edit, etc.)
+  // Remove o menu padrão (File, Edit, etc.)
   win.setMenu(null);
 }
 
@@ -46,21 +46,21 @@ app.whenReady().then(() => {
   };
 
   if (!app.isPackaged) {
-    sendUpdateStatus('Auto-atualizaÃ§Ã£o disponÃ­vel apenas na versÃ£o instalada.');
+    sendUpdateStatus('Auto-atualização disponível apenas na versão instalada.');
     return;
   }
 
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
-  autoUpdater.forceCodeSignatureVerification = false; // Permite atualizaÃ§Ã£o sem assinatura digital
+  autoUpdater.forceCodeSignatureVerification = false; // Permite atualização sem assinatura digital
 
   const checkUpdates = async () => {
     try {
-      sendUpdateStatus(`Checando atualizaÃ§Ãµes... (v${app.getVersion()})`);
+      sendUpdateStatus(`Checando atualizações... (v${app.getVersion()})`);
       await autoUpdater.checkForUpdates();
     } catch (err) {
       const message = err?.message || String(err);
-      sendUpdateStatus(`Erro ao checar atualizaÃ§Ã£o: ${message}`);
+      sendUpdateStatus(`Erro ao checar atualização: ${message}`);
     }
   };
 
@@ -112,7 +112,7 @@ ipcMain.handle('load-data', async (event, { key, initialData }) => {
   }
 });
 
-// AtualizaÃ§Ã£o da AplicaÃ§Ã£o
+// Atualização da Aplicação
 ipcMain.on('restart_app', () => {
   autoUpdater.quitAndInstall();
 });
@@ -130,7 +130,7 @@ ipcMain.on('app-close', () => {
   app.quit();
 });
 
-// --- Nova LÃ³gica de ImpressÃ£o (Silent Print) ---
+// --- Nova Lógica de Impressão (Silent Print) ---
 
 ipcMain.handle('get-printers', async (event) => {
   const win = BrowserWindow.getAllWindows()[0];
@@ -142,12 +142,12 @@ ipcMain.handle('get-printers', async (event) => {
 
 ipcMain.handle('print-data', async (event, { data, printerName }) => {
   const { execFile } = require('child_process');
-  console.log('=== [PRINT-DATA] Iniciando ImpressÃ£o via Auxiliar C# (v1.1.30) ===');
+  console.log('=== [PRINT-DATA] Iniciando Impressão via Auxiliar C# (v1.1.30) ===');
 
   try {
-    if (!data || !Array.isArray(data)) throw new Error("Dados invÃ¡lidos");
+    if (!data || !Array.isArray(data)) throw new Error("Dados inválidos");
 
-    // Comandos ESC/POS BÃ¡sicos
+    // Comandos ESC/POS Básicos
     const ESC = '\x1b';
     const GS = '\x1d';
     const commands = {
@@ -187,7 +187,7 @@ ipcMain.handle('print-data', async (event, { data, printerName }) => {
         // Reset styles for next item
         buffer = Buffer.concat([buffer, Buffer.from(commands.boldOff + commands.sizeNormal)]);
       } else if (item.type === 'table') {
-        // ImplementaÃ§Ã£o simplificada de tabela para modo texto
+        // Implementação simplificada de tabela para modo texton
         item.tableBody?.forEach(row => {
           const line = row.join(' ').substring(0, 32);
           buffer = Buffer.concat([buffer, toBytes(line)]);
@@ -195,7 +195,7 @@ ipcMain.handle('print-data', async (event, { data, printerName }) => {
       }
     });
 
-    // AvanÃ§o de papel e Corte
+    // Avanço de papel e Corte
     buffer = Buffer.concat([buffer, Buffer.from('\n\n' + GS + 'V\x42\x00')]);
 
     const tempPath = path.join(app.getPath('temp'), `print_${Date.now()}.bin`);
@@ -206,7 +206,7 @@ ipcMain.handle('print-data', async (event, { data, printerName }) => {
       : path.join(__dirname, 'FlowEstacPrinter.exe');
 
     // Se o asar estiver desativado, o path continua sendo __dirname em alguns casos, 
-    // mas vamos garantir verificando a existÃªncia
+    // mas vamos garantir verificando a existência
     const finalExePath = fs.existsSync(exePath) ? exePath : path.join(__dirname, 'FlowEstacPrinter.exe');
 
     return new Promise((resolve) => {
@@ -214,7 +214,7 @@ ipcMain.handle('print-data', async (event, { data, printerName }) => {
         try { fs.unlinkSync(tempPath); } catch (e) { }
 
         if (error) {
-          console.error('Erro no auxiliar de impressÃ£o:', error);
+          console.error('Erro no auxiliar de impressão:', error);
           resolve({ success: false, error: error.message });
         } else {
           console.log('Resultado do auxiliar:', stdout);
@@ -224,7 +224,7 @@ ipcMain.handle('print-data', async (event, { data, printerName }) => {
     });
 
   } catch (error) {
-    console.error("=== [PRINT-DATA] Erro CrÃ­tico:", error);
+    console.error("=== [PRINT-DATA] Erro Crítico:", error);
     return { success: false, error: error.message };
   }
 });
@@ -232,19 +232,19 @@ ipcMain.handle('print-data', async (event, { data, printerName }) => {
 
 // listeners do autoUpdater
 autoUpdater.on('checking-for-update', () => {
-  console.log('Checando por atualizaÃ§Ãµes...');
+  console.log('Checando por atualiza\u00e7\u00f5es...');
   const win = BrowserWindow.getAllWindows()[0];
-  if (win) win.webContents.send('update_status', 'Checando por atualizaÃ§Ãµes...');
+  if (win) win.webContents.send('update_status', 'Checando por atualiza\u00e7\u00f5es...');
 });
 
 autoUpdater.on('update-available', (info) => {
-  console.log('AtualizaÃ§Ã£o disponÃ­vel.');
+  console.log('Atualiza\u00e7\u00e3o dispon\u00edvel.');
   const win = BrowserWindow.getAllWindows()[0];
-  if (win) win.webContents.send('update_status', `AtualizaÃ§Ã£o disponÃ­vel: v${info.version}`);
+  if (win) win.webContents.send('update_status', `Atualiza\u00e7\u00e3o dispon\u00edvel: v${info.version}`);
 });
 
 autoUpdater.on('update-not-available', (info) => {
-  console.log('Nenhuma atualizaÃ§Ã£o disponÃ­vel.');
+  console.log('Nenhuma atualiza\u00e7\u00e3o dispon\u00edvel.');
   const win = BrowserWindow.getAllWindows()[0];
   if (win) win.webContents.send('update_status', 'Sistema atualizado.');
 });
@@ -252,7 +252,7 @@ autoUpdater.on('update-not-available', (info) => {
 autoUpdater.on('error', (err) => {
   console.error('Erro no autoUpdater:', err);
   const win = BrowserWindow.getAllWindows()[0];
-  if (win) win.webContents.send('update_status', `Erro na atualizaÃ§Ã£o: ${err.message}`);
+  if (win) win.webContents.send('update_status', `Erro na atualiza\u00e7\u00e3o: ${err.message}`);
 });
 
 autoUpdater.on('download-progress', (progressObj) => {
@@ -262,16 +262,16 @@ autoUpdater.on('download-progress', (progressObj) => {
 });
 
 autoUpdater.on('update-downloaded', (info) => {
-  console.log('AtualizaÃ§Ã£o baixada; pronta para instalar.');
+  console.log('Atualiza\u00e7\u00e3o baixada; pronta para instalar.');
   const win = BrowserWindow.getAllWindows()[0];
   if (win) {
-    win.webContents.send('update_status', 'AtualizaÃ§Ã£o pronta para instalar.');
+    win.webContents.send('update_status', 'Atualiza\u00e7\u00e3o pronta para instalar.');
     win.webContents.send('update_ready');
   }
 });
 
 ipcMain.handle('print-html', async (event, { content, printerName, printWidth }) => {
-  // Mantendo compatibilidade legada se necessÃ¡rio, mas o foco Ã© print-data
+  // Mantendo compatibilidade legada se necessário, mas o foco é print-data
   const width = printWidth ? parseInt(printWidth) + 20 : 300;
   const workerWindow = new BrowserWindow({
     show: false,
@@ -306,7 +306,7 @@ ipcMain.handle('print-html', async (event, { content, printerName, printWidth })
     return { success: true };
   } catch (error) {
     workerWindow.close();
-    console.error("Erro na impressÃ£o silenciosa:", error);
+    console.error("Erro na impressão silenciosa:", error);
     return { success: false, error: error.message };
   }
 });
@@ -314,16 +314,16 @@ ipcMain.handle('print-html', async (event, { content, printerName, printWidth })
 // --- NFSE Emission ---
 ipcMain.handle('emit-nfse', async (event, { movement, config }) => {
   const { execFile } = require('child_process');
-  console.log('=== [NFSE] Iniciando EmissÃ£o via Auxiliar C# ===');
+  console.log('=== [NFSE] Iniciando Emissão via Auxiliar C# ===');
 
   return new Promise((resolve) => {
     // Caminho para o executÃ¡vel C# (deve estar na mesma pasta ou em 'extraResources')
     const exePath = path.join(process.resourcesPath || __dirname, 'FlowEstacNfse.exe');
 
-    // Se o executÃ¡vel nÃ£o existir ainda, apenas logamos e retornamos sucesso fictÃ­cio para teste do fluxo
+    // Se o executável não existir ainda, apenas logamos e retornamos sucesso fictício para teste do fluxo
     if (!fs.existsSync(exePath)) {
-      console.warn('MÃ³dulo FlowEstacNfse.exe nÃ£o encontrado. Simulando sucesso para teste do fluxo.');
-      return resolve({ success: true, message: 'Nota simulada (MÃ³dulo C# ausente).' });
+      console.warn('Módulo FlowEstacNfse.exe não encontrado. Simulando sucesso para teste do fluxo.');
+      return resolve({ success: true, message: 'Nota simulada (Módulo C# ausente).' });
     }
 
     const inputData = JSON.stringify({ movement, config });
@@ -349,25 +349,25 @@ ipcMain.handle('check-certificate-info', async (event, { certPath, certPassword 
   console.log('=== [CERT] Verificando validade do certificado ===');
 
   if (!certPath || !fs.existsSync(certPath)) {
-    return { success: false, error: 'Arquivo do certificado nÃ£o encontrado.' };
+    return { success: false, error: 'Arquivo do certificado não encontrado.' };
   }
 
-  // Como extrair info de PFX no Node sem bibliotecas externas pesadas Ã© complexo,
-  // e o usuÃ¡rio jÃ¡ tem um auxiliar C#, vamos delegar essa leitura para o FlowEstacNfse.exe
-  // ou tentar uma leitura bÃ¡sica de metadados se possÃ­vel.
+  // Como extrair info de PFX no Node sem bibliotecas externas pesadas é complexo,
+  // e o usuário já tem um auxiliar C#, vamos delegar essa leitura para o FlowEstacNfse.exe
+  // ou tentar uma leitura básica de metadados se possível.
   // Para manter a robustez, chamaremos o .exe com um comando de "info".
 
   const { execFile } = require('child_process');
   const exePath = path.join(process.resourcesPath || __dirname, 'FlowEstacNfse.exe');
 
   if (!fs.existsSync(exePath)) {
-    // Mock para desenvolvimento se o .exe nÃ£o existir
+    // Mock para desenvolvimento se o .exe não existir
     const mockExpiration = new Date();
     mockExpiration.setFullYear(mockExpiration.getFullYear() + 1);
     return {
       success: true,
       expiration: mockExpiration.toISOString(),
-      subject: 'Certificado de Teste (MÃ³dulo C# Ausente)',
+      subject: 'Certificado de Teste (Módulo C# Ausente)',
       isMock: true
     };
   }
@@ -379,7 +379,7 @@ ipcMain.handle('check-certificate-info', async (event, { certPath, certPassword 
       try {
         resolve(JSON.parse(stdout));
       } catch (e) {
-        resolve({ success: false, error: 'Falha ao processar resposta do mÃ³dulo NFSE.' });
+        resolve({ success: false, error: 'Falha ao processar resposta do módulo NFSE.' });
       }
     });
   });
