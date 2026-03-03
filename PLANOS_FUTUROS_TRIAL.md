@@ -34,6 +34,14 @@ Para automatizar o processo:
 2. **Base de Dados de Licenças:** Esse script atualiza o arquivo JSON no GitHub ou cria o cliente no Asaas automaticamente.
 3. **Identificação:** O usuário precisaria informar o CNPJ ou um Token de Ativação recebido no e-mail da compra para vincular o sistema instalado à sua licença na nuvem.
 
+## 4. Migração para SaaS (Firebase) - **PRIORIDADE PARA VENDAS**
+
+Para simplificar a integração com plataformas de infoprodutos (Hotmart, Eduzz, Kiwify) e abandonar o controle via Asaas:
+1. **Novo Banco de Dados (Firebase):** Criar um banco de dados no Firebase (gratuito e sem risco de pausa por inatividade) para armazenar os status de licença (CNPJ -> Status).
+2. **Centralização de Webhooks:** Ter um servidor simples (ex: Cloud Function/Edge Function) que recebe o sinal de pagamento da plataforma de venda e atualiza o Firebase como "Pago/Ativo". Ou, receber o sinal de cancelamento e atualizar como "Bloqueado".
+3. **App Desktop:** Mudar a função `checkLicense` do `index.tsx` para consultar **somente o Firebase**, removendo as chamadas para o Asaas/GitHub.
+4. **Vendas Manuais:** Clientes fechados no boca-a-boca/Pix direto podem ser cadastrados manualmente direto no painel do Firebase ou numa telinha admin separada.
+
 ---
 *Nota: Estas informações foram compiladas durante a versão 1.1.42 para referência em desenvolvimento futuro.*
 
