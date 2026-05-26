@@ -1,3 +1,13 @@
+# FlowEstac v1.1.54 - Changelog
+
+## Correções e Melhorias (v1.1.54)
+### 💰 Cálculo de Estadia e Diárias
+- **Correção no Cálculo de Períodos:** Implementada nova lógica para evitar a soma indevida de horas extras quando o veículo cruza o horário de troca de turno (Diária/Pernoite).
+- **Proteção contra Cobrança Dupla:** Garantido que estadias curtas que cruzam a fronteira de horário sejam cobradas como um período único, respeitando o valor da "primeira hora" apenas uma vez.
+- **Priorização de Valores Fixos:** Para estadias longas, o sistema agora prioriza corretamente os valores fixos de Diária e Pernoite sem adicionar horas avulsas desnecessárias.
+
+---
+
 # FlowEstac v1.1.47 - Changelog
 
 ## Novas Funcionalidades (v1.1.47)

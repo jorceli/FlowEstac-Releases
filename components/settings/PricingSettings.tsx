@@ -148,7 +148,9 @@ export const PricingSettings: React.FC<any> = (props) => {
                   if (config.chargeModel === 'bands' && config.timeBands?.length > 0) {
                     const bands = [...config.timeBands].sort((a, b) => a.upToHours - b.upToHours);
                     let found = false;
-                    for (const band of bands) { if (hours <= band.upToHours) { price = band.price; desc = `Até ${band.upToHours}h`; found = true; break; } }
+                    for (const band of bands) {
+                      if (hours <= band.upToHours) { price = band.price; desc = `Até ${band.upToHours}h`; found = true; break; }
+                    }
                     if (!found) {
                       const lastBand = bands[bands.length - 1];
                       const addHours = Math.ceil(hours - lastBand.upToHours);
@@ -159,13 +161,16 @@ export const PricingSettings: React.FC<any> = (props) => {
                     if (hours <= 1) { price = config.firstHourRate; desc = '1ª Hora'; }
                     else { const addHours = Math.ceil(hours - 1); price = config.firstHourRate + (addHours * config.additionalHourRate); desc = `1ª Hora + ${addHours}h Adic.`; }
                   }
-                  if (config.dailyCapHours && hours >= config.dailyCapHours) return { price: config.fixedRate, desc: `Limite ${config.dailyCapHours}h → Diária` };
+                  if (config.dailyCapHours && hours >= config.dailyCapHours) { return { price: config.fixedRate, desc: `Limite ${config.dailyCapHours}h → Diária` }; }
                   return { price, desc };
                 };
 
                 let result;
+                const totalHours = durationMillis / (1000 * 60 * 60);
                 if (!config.enableOvernight || !config.diariaStartTime || !config.diariaEndTime) {
-                  result = calcHourly(durationMillis / (1000 * 60 * 60));
+                  result = calcHourly(totalHours);
+                } else if (totalHours <= (config.dailyCapHours || 2)) {
+                  result = calcHourly(totalHours);
                 } else {
                   const [sH, sM] = config.diariaStartTime.split(':').map(Number);
                   const [eH, eM] = config.diariaEndTime.split(':').map(Number);
@@ -173,22 +178,29 @@ export const PricingSettings: React.FC<any> = (props) => {
                   while (cur < exit) {
                     const isDiaria = cur.getHours() >= sH && (cur.getHours() < eH || (cur.getHours() === eH && cur.getMinutes() < eM));
                     const pEnd = new Date(cur);
-                    if (isDiaria) pEnd.setHours(eH, eM, 0, 0);
-                    else { if (cur.getHours() >= eH) pEnd.setDate(pEnd.getDate() + 1); pEnd.setHours(sH, sM, 0, 0); }
+                    if (isDiaria) {
+                      pEnd.setHours(eH, eM, 0, 0);
+                      if (pEnd <= cur) pEnd.setDate(pEnd.getDate() + 1);
+                    } else {
+                      if (cur.getHours() >= eH) pEnd.setDate(pEnd.getDate() + 1);
+                      pEnd.setHours(sH, sM, 0, 0);
+                      if (pEnd <= cur) pEnd.setDate(pEnd.getDate() + 1);
+                    }
                     const effEnd = exit < pEnd ? exit : pEnd;
                     const dur = (effEnd.getTime() - cur.getTime()) / (1000 * 60 * 60);
-                    if (isDiaria) {
-                      const h = calcHourly(dur);
-                      const pPrice = (config.dailyCapHours && dur < config.dailyCapHours) ? h.price : Math.min(h.price, config.fixedRate);
-                      total += pPrice; descs.push(pPrice === config.fixedRate ? "1 Diária" : h.desc);
-                    } else {
-                      const h = calcHourly(dur);
-                      const pPrice = Math.min(h.price, config.overnightRate);
-                      total += pPrice; descs.push(pPrice === config.overnightRate ? "1 Pernoite" : h.desc);
+                    if (dur > 0.01) {
+                      if (isDiaria) {
+                        total += config.fixedRate; descs.push("1 Diária");
+                      } else {
+                        total += config.overnightRate; descs.push("1 Pernoite");
+                      }
                     }
                     cur = effEnd;
                   }
-                  result = { price: total, desc: descs.join(' + ') };
+                  // Simplify descriptions
+                  const simplified = descs.reduce((acc: any, d) => { acc[d] = (acc[d] || 0) + 1; return acc; }, {});
+                  const descStr = Object.entries(simplified).map(([m, c]) => (c as number) > 1 ? `${c}x ${m}` : m).join(' + ');
+                  result = { price: total, desc: descStr };
                 }
 
                 const display = document.getElementById('sim-result');

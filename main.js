@@ -38,6 +38,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  console.log('FlowEstac Desktop v1.1.54 Iniciado');
   createWindow();
 
   const sendUpdateStatus = (status) => {
@@ -385,74 +386,7 @@ ipcMain.handle('check-certificate-info', async (event, { certPath, certPassword 
   });
 });
 
-// --- Asaas Licensing ---
-ipcMain.handle('check-asaas-license', async (event, { cnpj }) => {
-  const https = require('https');
-  const apiKey = process.env.ASAAS_API_KEY;
-  console.log(`=== [ASAAS] Verificando licença para CNPJ: ${cnpj} ===`);
-
-  if (!apiKey) return { success: false, error: 'Chave de API do Asaas não configurada.' };
-
-  const sanitizedCnpj = cnpj.replace(/\D/g, '');
-
-  const options = {
-    hostname: 'api.asaas.com',
-    port: 443,
-    path: `/v3/customers?cpfCnpj=${sanitizedCnpj}`,
-    method: 'GET',
-    headers: {
-      'access_token': apiKey,
-      'User-Agent': 'FlowEstac-Desktop'
-    }
-  };
-
-  return new Promise((resolve) => {
-    const req = https.request(options, (res) => {
-      let data = '';
-      res.on('data', (chunk) => data += chunk);
-      res.on('end', () => {
-        try {
-          const customers = JSON.parse(data);
-          if (!customers.data || customers.data.length === 0) {
-            return resolve({ success: true, status: 'active', message: 'Cliente não encontrado no Asaas. Liberado por padrão.' });
-          }
-
-          const customerId = customers.data[0].id;
-
-          const payOptions = {
-            ...options,
-            path: `/v3/payments?customer=${customerId}&status=OVERDUE`
-          };
-
-          const payReq = https.request(payOptions, (payRes) => {
-            let payData = '';
-            payRes.on('data', (chunk) => payData += chunk);
-            payRes.on('end', () => {
-              try {
-                const payments = JSON.parse(payData);
-                if (payments.data && payments.data.length > 0) {
-                  resolve({ success: true, status: 'blocked', message: 'Existem mensalidades pendentes no Asaas.' });
-                } else {
-                  resolve({ success: true, status: 'active' });
-                }
-              } catch (e) {
-                resolve({ success: false, error: 'Erro ao processar pagamentos do Asaas.' });
-              }
-            });
-          });
-          payReq.on('error', (e) => resolve({ success: false, error: e.message }));
-          payReq.end();
-
-        } catch (e) {
-          resolve({ success: false, error: 'Erro ao processar resposta do Asaas.' });
-        }
-      });
-    });
-
-    req.on('error', (e) => resolve({ success: false, error: e.message }));
-    req.end();
-  });
-});
+// Legacy Asaas Licensing removed. License checking is now handled by Firebase in the frontend.
 
 
 

@@ -338,7 +338,7 @@ export interface IElectronAPI {
     printData: (data: any[], printerName?: string, width?: string | number) => Promise<{ success: boolean; error?: string }>;
     emitNfse: (movement: VehicleMovement, config: NfseConfig) => Promise<{ success: boolean; error?: string }>;
     checkCertificateInfo: (certPath: string, certPassword?: string) => Promise<{ success: boolean; expiration?: string; subject?: string; error?: string }>;
-    checkAsaasLicense: (cnpj: string) => Promise<{ success: boolean; status?: string; message?: string; error?: string }>;
+    // checkAsaasLicense removed in favor of Firebase
     getAppVersion: () => Promise<string>;
     closeApp: () => void;
 }
@@ -906,15 +906,40 @@ const Sidebar: React.FC<{
     setCurrentPage: (page: Page) => void;
     loggedInUser: Employee;
     onLogout: () => void;
+    onSupportClick: () => void;
     updateReady: boolean;
     licenseStatus: 'checking' | 'active' | 'blocked' | 'offline';
     nfseConfig: NfseConfig;
-}> = ({ currentPage, setCurrentPage, loggedInUser, onLogout, updateReady, licenseStatus, nfseConfig }) => {
+}> = ({ currentPage, setCurrentPage, loggedInUser, onLogout, onSupportClick, updateReady, licenseStatus, nfseConfig }) => {
     const { t } = useLanguage();
     const [version, setVersion] = useState<string>('...');
     const [updateStatus, setUpdateStatus] = useState<string>('');
     const [isCollapsed, setIsCollapsed] = useState(false);
     const [isNetworkOnline, setIsNetworkOnline] = useState(navigator.onLine);
+
+    // Trial Calculation
+    const TRIAL_PERIOD_DAYS = 14;
+    const [trialDaysLeft, setTrialDaysLeft] = useState<number | null>(null);
+    const { generalSettings } = useData();
+
+    useEffect(() => {
+        const installDateStr = generalSettings?.installationDate;
+        if (installDateStr) {
+            const installDate = new Date(installDateStr);
+            const now = new Date();
+            const diffTrialTime = now.getTime() - installDate.getTime();
+            const diffTrialDays = Math.floor(diffTrialTime / (1000 * 60 * 60 * 24));
+            const remaining = Math.max(0, TRIAL_PERIOD_DAYS - diffTrialDays);
+
+            // Only show trial warning if not admin and actually in trial period
+            const ADMIN_CNPJ = '48062404000136';
+            const cleanCnpj = nfseConfig?.cnpj?.replace(/\D/g, '') || '';
+
+            if (cleanCnpj !== ADMIN_CNPJ && diffTrialDays <= TRIAL_PERIOD_DAYS) {
+                setTrialDaysLeft(remaining);
+            }
+        }
+    }, [generalSettings?.installationDate, nfseConfig?.cnpj]);
 
     useEffect(() => {
         const handleOnline = () => setIsNetworkOnline(true);
@@ -943,6 +968,7 @@ const Sidebar: React.FC<{
         { id: 'employees', label: t('common.employees'), icon: UserGroupIcon },
         { id: 'reports', label: t('common.reports'), icon: ChartBarIcon },
         { id: 'settings', label: t('common.settings'), icon: CogIcon },
+        { id: 'support', label: 'Suporte', icon: ChatIcon },
     ];
 
     const visibleMenuItems = loggedInUser.isAdmin
@@ -1008,7 +1034,11 @@ const Sidebar: React.FC<{
                                     href="#"
                                     onClick={(e) => {
                                         e.preventDefault();
-                                        setCurrentPage(item.id as Page);
+                                        if (item.id === 'support') {
+                                            onSupportClick();
+                                        } else {
+                                            setCurrentPage(item.id as Page);
+                                        }
                                     }}
                                     className={`flex items-center ${isCollapsed ? 'justify-center px-0' : 'px-3'} py-3 rounded-xl transition-all duration-200 group relative ${isActive
                                         ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/30'
@@ -1068,6 +1098,27 @@ const Sidebar: React.FC<{
                 </div>
             </div>
 
+            {/* Trial Warning Banner in Sidebar */}
+            {trialDaysLeft !== null && !isCollapsed && (
+                <div className="mx-3 mt-4 mb-2 p-3 bg-gradient-to-r from-orange-100 to-amber-100 dark:from-orange-900/40 dark:to-amber-900/40 border border-orange-200 dark:border-orange-800/50 rounded-xl shadow-sm relative overflow-hidden group">
+                    <div className="absolute top-0 left-0 w-1 h-full bg-orange-500"></div>
+                    <div className="flex items-start">
+                        <div className="flex-shrink-0 mt-0.5">
+                            <svg className="h-5 w-5 text-orange-500" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
+                            </svg>
+                        </div>
+                        <div className="ml-2 w-0 flex-1">
+                            <h3 className="text-sm font-bold text-orange-800 dark:text-orange-300">
+                                Período de Teste
+                            </h3>
+                            <div className="mt-1 text-xs text-orange-700 dark:text-orange-400">
+                                <p>Restam <span className="font-extrabold text-orange-900 dark:text-orange-200">{trialDaysLeft} dias</span> grátis.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {updateStatus && !isCollapsed && (
                 <div className="px-4 py-2 text-xs text-center text-blue-600 dark:text-blue-400 font-medium animate-pulse bg-blue-50 dark:bg-blue-900/20 mx-2 rounded-lg mb-2">
@@ -1098,8 +1149,7 @@ const Sidebar: React.FC<{
                     {!isCollapsed && <span className="font-medium ml-2 text-sm">{t('common.logout')}</span>}
                 </button>
             </div>
-
-            <div className="pb-4 text-center text-[10px] text-slate-400 font-medium">
+            <div className={`py-4 text-center text-[10px] text-slate-400 font-medium transition-all duration-300 ${isCollapsed ? 'opacity-0 h-0 hidden' : 'opacity-100'}`}>
                 <p className="opacity-70">FlowEstac v{version}</p>
             </div>
         </aside>
@@ -1127,7 +1177,7 @@ const getChargeTypeFromCustomerType = (customerType: CustomerType): ChargeType =
 
 // --- Dashboard (from components/Dashboard.tsx) ---
 const Dashboard: React.FC = () => {
-    const { movements, setMovements, customers, services, generalSettings, couponPrintConfig, printerConfig, setCancellationLogs, modules } = useData();
+    const { movements, setMovements, customers, services, generalSettings, couponPrintConfig, printerConfig, setCancellationLogs, modules, nfseConfig } = useData();
     const { loggedInUser } = useAuth();
     const [isMonthlyPaymentModalOpen, setIsMonthlyPaymentModalOpen] = useState(false);
     const [isCashClosingModalOpen, setIsCashClosingModalOpen] = useState(false);
@@ -1149,6 +1199,28 @@ const Dashboard: React.FC = () => {
 
     // State for Search
     const [couponSearch, setCouponSearch] = useState('');
+
+    // Trial Calculation for Dashboard Warning
+    const TRIAL_PERIOD_DAYS = 14;
+    const [trialDaysLeft, setTrialDaysLeft] = useState<number | null>(null);
+
+    useEffect(() => {
+        const installDateStr = generalSettings?.installationDate;
+        if (installDateStr) {
+            const installDate = new Date(installDateStr);
+            const now = new Date();
+            const diffTrialTime = now.getTime() - installDate.getTime();
+            const diffTrialDays = Math.floor(diffTrialTime / (1000 * 60 * 60 * 24));
+            const remaining = Math.max(0, TRIAL_PERIOD_DAYS - diffTrialDays);
+
+            const ADMIN_CNPJ = '48062404000136';
+            const cleanCnpj = nfseConfig?.cnpj?.replace(/\D/g, '') || '';
+
+            if (cleanCnpj !== ADMIN_CNPJ && diffTrialDays <= TRIAL_PERIOD_DAYS) {
+                setTrialDaysLeft(remaining);
+            }
+        }
+    }, [generalSettings?.installationDate, nfseConfig?.cnpj]);
     const [plateSearch, setPlateSearch] = useState('');
     const plateInputRef = useRef<HTMLInputElement>(null);
 
@@ -1158,8 +1230,9 @@ const Dashboard: React.FC = () => {
     const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
     const [alertMessage, setAlertMessage] = useState(''); // Global alert state
 
-    // Focus management
+    // Focus management - simplified to avoid potential loops
     const focusPlateInput = () => {
+        // Only focus if no modal is open (Dashboard only renders when it's the current page)
         if (
             !isMonthlyPaymentModalOpen &&
             !isCashClosingModalOpen &&
@@ -1172,22 +1245,20 @@ const Dashboard: React.FC = () => {
             !isWithdrawalModalOpen &&
             !isExpenseModalOpen
         ) {
-            // Use requestAnimationFrame for smoother focus transition
-            requestAnimationFrame(() => {
-                if (plateInputRef.current) {
-                    plateInputRef.current.focus();
+            if (plateInputRef.current) {
+                plateInputRef.current.focus();
+                // Optionally select text only if it's not empty to avoid disrupting typing
+                if (plateInputRef.current.value) {
                     plateInputRef.current.select();
                 }
-            });
-            // FALLBACK: Ensure focus returns even if the first attempt fails (browser timing)
-            setTimeout(() => {
-                if (plateInputRef.current) {
-                    plateInputRef.current.focus();
-                    // Don't select again to avoid annoyance if user started typing
-                }
-            }, 150);
+            }
         }
     };
+
+    // Auto-focus only when relevant states change
+    useEffect(() => {
+        focusPlateInput();
+    }, [isMonthlyPaymentModalOpen, isCashClosingModalOpen, selectedMovementForPayment, selectedMovementForEdit, movementToCancel, movementForPrint, isConfirmEntryModalOpen, isOpeningBalanceModalOpen, isWithdrawalModalOpen, isExpenseModalOpen]);
 
     // Shortcuts and window focus
     useEffect(() => {
@@ -1205,8 +1276,6 @@ const Dashboard: React.FC = () => {
         const handleWindowFocus = () => focusPlateInput();
 
         const handleDocumentClick = (e: MouseEvent) => {
-            // If the user clicks on the document, try to refocus the plate input
-            // but only if they didn't click on an input, button or inside a modal.
             const target = e.target as HTMLElement;
             const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT';
             const isButton = target.closest('button');
@@ -1220,19 +1289,13 @@ const Dashboard: React.FC = () => {
         window.addEventListener('keydown', handleKeyDown);
         window.addEventListener('focus', handleWindowFocus);
         document.addEventListener('mousedown', handleDocumentClick);
-        focusPlateInput(); // Initial focus
-
+        
         return () => {
             window.removeEventListener('keydown', handleKeyDown);
             window.removeEventListener('focus', handleWindowFocus);
             document.removeEventListener('mousedown', handleDocumentClick);
         };
-    }, [isMonthlyPaymentModalOpen, isCashClosingModalOpen, selectedMovementForPayment, selectedMovementForEdit, movementToCancel, movementForPrint, isOpeningBalanceModalOpen, isWithdrawalModalOpen, isExpenseModalOpen]);
-
-    // Auto-focus when returning from modals or clearing plate
-    useEffect(() => {
-        focusPlateInput();
-    }, [isMonthlyPaymentModalOpen, isCashClosingModalOpen, selectedMovementForPayment, selectedMovementForEdit, movementToCancel, movementForPrint, isConfirmEntryModalOpen, isOpeningBalanceModalOpen, isWithdrawalModalOpen, isExpenseModalOpen]);
+    }, []); // Removed currentPage dependency as it's not in scope and not needed for mounting listeners
 
     const Clock = () => {
         const [time, setTime] = useState(new Date());
@@ -1275,17 +1338,18 @@ const Dashboard: React.FC = () => {
                 .find(m => m.plate.toUpperCase() === newPlate);
 
             if (existingCustomer) {
-                setModel(existingCustomer.model || lastMovement?.model || ''); // Pre-fill model from customer or last movement
-                setEntryCustomerName(existingCustomer.name);
-                setEntryCustomerPhone(existingCustomer.phone);
+                // Pre-fill model from customer or last movement only if currently empty
+                if (!model) setModel(existingCustomer.model || lastMovement?.model || ''); 
+                if (!entryCustomerName) setEntryCustomerName(existingCustomer.name);
+                if (!entryCustomerPhone) setEntryCustomerPhone(existingCustomer.phone);
                 setCustomerType(existingCustomer.customerType);
             } else if (lastMovement) {
                 // Fallback to movement history for non-customers
                 // Only autofill if not a 'mensalista' from history, as that's a customer-specific status
                 if (lastMovement.chargeType !== ChargeType.MENSAL) {
-                    setModel(lastMovement.model || '');
-                    setEntryCustomerName(lastMovement.customerName === 'AVULSO' ? '' : lastMovement.customerName || '');
-                    setEntryCustomerPhone(lastMovement.customerPhone || '');
+                    if (!model) setModel(lastMovement.model || '');
+                    if (!entryCustomerName) setEntryCustomerName(lastMovement.customerName === 'AVULSO' ? '' : lastMovement.customerName || '');
+                    if (!entryCustomerPhone) setEntryCustomerPhone(lastMovement.customerPhone || '');
                     setVehicleType(lastMovement.vehicleType);
                 }
             }
@@ -1295,6 +1359,13 @@ const Dashboard: React.FC = () => {
     const handleRegisterEntry = () => {
         if (!plate) {
             setAlertMessage('A placa é obrigatória.');
+            return;
+        }
+
+        // Verifica se o veículo já está no pátio
+        const isAlreadyInPatio = movements.some(m => m.plate.toUpperCase() === plate.toUpperCase() && m.status === 'parked');
+        if (isAlreadyInPatio) {
+            setAlertMessage(`O veículo com placa ${plate.toUpperCase()} já está no pátio.`);
             return;
         }
 
@@ -1550,6 +1621,30 @@ const Dashboard: React.FC = () => {
                     </div>
                 </header>
 
+                {/* Dashboard Trial Banner - Takes full width if present */}
+                {trialDaysLeft !== null && (
+                    <div className="mb-4 bg-orange-50 dark:bg-orange-900/30 border-l-4 border-orange-500 p-4 rounded-r-md flex items-center justify-between shadow-sm animate-pulse_once">
+                        <div className="flex items-center">
+                            <div className="flex-shrink-0">
+                                <svg className="h-6 w-6 text-orange-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                </svg>
+                            </div>
+                            <div className="ml-3">
+                                <h3 className="text-sm font-bold text-orange-800 dark:text-orange-300">Atenção! Seu período de teste grátis ({TRIAL_PERIOD_DAYS} dias) está em andamento.</h3>
+                                <div className="mt-1 text-sm text-orange-700 dark:text-orange-400">
+                                    Faltam <strong>{trialDaysLeft} dias</strong> para o bloqueio do sistema. Entre as configurações e regularize sua licença.
+                                </div>
+                            </div>
+                        </div>
+                        <div>
+                            <button onClick={() => window.open('https://wa.me/5551995896312?text=Olá, meu período de teste do FlowEstac está acabando e gostaria de ver os planos.', '_blank')} className="bg-orange-600 hover:bg-orange-700 text-white font-bold py-2 px-4 rounded text-sm transition-colors shadow-sm cursor-pointer">
+                                Falar com Suporte (WhatsApp)
+                            </button>
+                        </div>
+                    </div>
+                )}
+
                 {/* Entry Form */}
                 <section className="border-b dark:border-slate-700 pb-4 mb-4">
                     <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3 items-end">
@@ -1720,6 +1815,13 @@ const calculateDetailedPrice = (entryTime: Date, exitTime: Date, config: Pricing
         return calculateHourlyPart(totalDurationHours);
     }
 
+    // NOVA LÓGICA: Se a duração total estiver dentro da faixa horária (até o limite da diária), 
+    // calcula como um período único para evitar múltiplas cobranças de "1ª hora" ao cruzar fronteiras.
+    const capHours = config.dailyCapHours || 2;
+    if (totalDurationHours <= capHours) {
+        return calculateHourlyPart(totalDurationHours);
+    }
+
     const [startHour, startMinute] = config.diariaStartTime.split(':').map(Number);
     const [endHour, endMinute] = config.diariaEndTime.split(':').map(Number);
 
@@ -1733,37 +1835,25 @@ const calculateDetailedPrice = (entryTime: Date, exitTime: Date, config: Pricing
         const periodEnd = new Date(current);
         if (isCurrentInDiaria) {
             periodEnd.setHours(endHour, endMinute, 0, 0);
+            if (periodEnd <= current) periodEnd.setDate(periodEnd.getDate() + 1);
         } else {
             if (current.getHours() >= endHour) periodEnd.setDate(periodEnd.getDate() + 1);
             periodEnd.setHours(startHour, startMinute, 0, 0);
+            if (periodEnd <= current) periodEnd.setDate(periodEnd.getDate() + 1);
         }
 
         const effectiveEnd = exitTime < periodEnd ? exitTime : periodEnd;
         const periodDurationHours = (effectiveEnd.getTime() - current.getTime()) / (1000 * 60 * 60);
 
-        if (isCurrentInDiaria) {
-            // Logic for Daily period: compare hourly cost vs fixed daily rate
-            const hourly = calculateHourlyPart(periodDurationHours);
-            const periodPrice = (config.dailyCapHours && periodDurationHours < config.dailyCapHours)
-                ? hourly.price
-                : Math.min(hourly.price, config.fixedRate);
-
-            totalCost += periodPrice;
-            if (periodPrice === config.fixedRate) {
+        // Se a duração total já excedeu o cap, qualquer tempo gasto em um período 
+        // conta como o valor fixo daquele período (Diária ou Pernoite).
+        if (periodDurationHours > 0.01) { // Tolerância de 36 segundos
+            if (isCurrentInDiaria) {
+                totalCost += config.fixedRate;
                 descriptions.push("1 Diária");
             } else {
-                descriptions.push(hourly.description);
-            }
-        } else {
-            // Logic for Overnight period: compare hourly cost vs overnight rate
-            const hourly = calculateHourlyPart(periodDurationHours);
-            const periodPrice = Math.min(hourly.price, config.overnightRate);
-
-            totalCost += periodPrice;
-            if (periodPrice === config.overnightRate) {
+                totalCost += config.overnightRate;
                 descriptions.push("1 Pernoite");
-            } else {
-                descriptions.push(hourly.description);
             }
         }
 
@@ -4290,34 +4380,90 @@ const Login: React.FC<{ onLoginSuccess: (employee: Employee) => void; }> = ({ on
 };
 
 // --- License Blocked Screen ---
-const LicenseBlockedScreen: React.FC = () => (
-    <div className="fixed inset-0 bg-slate-100 dark:bg-slate-900 z-[9999] flex items-center justify-center p-6 text-center">
-        <div className="bg-white dark:bg-slate-800 p-10 rounded-2xl shadow-2xl max-w-lg border-2 border-red-500">
-            <div className="text-red-500 mb-6 flex justify-center">
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-20 h-20">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m0-10.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.75c0 5.592 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.57-.598-3.75h-.152c-3.196 0-6.1-1.248-8.25-3.286Zm0 13.036h.008v.008H12v-.008Z" />
-                </svg>
-            </div>
-            <h1 className="text-3xl font-bold text-slate-800 dark:text-slate-100 mb-4">Acesso Bloqueado</h1>
-            <p className="text-slate-600 dark:text-slate-400 mb-8 leading-relaxed">
-                Detectamos uma irregularidade na licença de uso do FlowEstac, pagamento pendente ou seu período de teste de 14 dias expirou.
-                Por favor, entre em contato com o suporte para aderir a um plano e regularizar sua situação.
-            </p>
-            <div className="space-y-4">
-                <div className="p-4 bg-slate-50 dark:bg-slate-700/50 rounded-lg text-sm">
-                    <p className="font-semibold text-slate-700 dark:text-slate-200">Suporte FlowEstac</p>
-                    <p className="text-blue-600 dark:text-blue-400">contato@flowestac.com.br</p>
+const LicenseBlockedScreen: React.FC<{ onRecheck: () => void }> = ({ onRecheck }) => {
+    const { nfseConfig, setNfseConfig } = useData();
+    const [cnpj, setCnpj] = useState(nfseConfig.cnpj || '');
+    const [isSaving, setIsSaving] = useState(false);
+
+    const handleSaveCnpj = async () => {
+        if (!cnpj.trim()) {
+            alert('Por favor, informe um CNPJ válido.');
+            return;
+        }
+        setIsSaving(true);
+        try {
+            await setNfseConfig({ ...nfseConfig, cnpj: cnpj.trim() });
+            // O useEffect no App vai disparar o checkLicense automaticamente pois nfseConfig mudou
+            // Mas chamamos onRecheck por garantia se o CNPJ for o mesmo
+            onRecheck();
+        } catch (err) {
+            alert('Erro ao salvar CNPJ.');
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 bg-slate-100 dark:bg-slate-900 z-[9999] flex items-center justify-center p-4 md:p-6 text-center overflow-y-auto">
+            <div className="bg-white dark:bg-slate-800 p-6 md:p-10 rounded-2xl shadow-2xl max-w-lg w-full border-2 border-red-500 my-8">
+                <div className="text-red-500 mb-6 flex justify-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-16 h-16 md:w-20 md:h-20">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m0-10.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.75c0 5.592 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.57-.598-3.75h-.152c-3.196 0-6.1-1.248-8.25-3.286Zm0 13.036h.008v.008H12v-.008Z" />
+                    </svg>
                 </div>
-                <button
-                    onClick={() => window.location.reload()}
-                    className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-colors"
-                >
-                    Tentar Novamente
-                </button>
+                <h1 className="text-2xl md:text-3xl font-bold text-slate-800 dark:text-slate-100 mb-4">Acesso Bloqueado</h1>
+                <p className="text-sm md:text-base text-slate-600 dark:text-slate-400 mb-6 leading-relaxed">
+                    Detectamos uma irregularidade na licença de uso do FlowEstac, pagamento pendente ou seu período de teste de 14 dias expirou.
+                </p>
+
+                <div className="bg-slate-50 dark:bg-slate-700/30 p-4 rounded-xl mb-6 border border-slate-200 dark:border-slate-700">
+                    <label className="block text-left text-xs font-bold uppercase text-slate-500 dark:text-slate-400 mb-2 ml-1">
+                        Informe seu CNPJ para Ativação
+                    </label>
+                    <div className="flex gap-2">
+                        <input
+                            type="text"
+                            value={cnpj}
+                            onChange={(e) => setCnpj(e.target.value)}
+                            placeholder="00.000.000/0001-00"
+                            className="flex-1 p-3 rounded-lg border border-slate-300 dark:border-slate-600 dark:bg-slate-800 text-slate-800 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                        />
+                        <button
+                            onClick={handleSaveCnpj}
+                            disabled={isSaving}
+                            className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-bold transition-colors disabled:opacity-50"
+                        >
+                            {isSaving ? '...' : 'Salvar'}
+                        </button>
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-2 text-left italic">
+                        * Após salvar, o sistema tentará validar sua licença online.
+                    </p>
+                </div>
+
+                <div className="space-y-4">
+                    <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg text-sm text-center border border-blue-100 dark:border-blue-800/30">
+                        <p className="font-semibold text-slate-700 dark:text-slate-200">Suporte FlowEstac (WhatsApp)</p>
+                        <button
+                            onClick={() => window.open('https://wa.me/5551998595952?text=Olá, meu FlowEstac foi bloqueado e preciso regularizar minha licença.', '_blank')}
+                            className="mt-2 text-green-600 dark:text-green-400 font-bold hover:underline inline-flex items-center gap-2"
+                        >
+                            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z"/></svg>
+                            (51) 99859-5952
+                        </button>
+                    </div>
+                    <button
+                        onClick={onRecheck}
+                        className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-colors shadow-lg shadow-blue-500/30 flex items-center justify-center gap-2"
+                    >
+                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                        Tentar Novamente
+                    </button>
+                </div>
             </div>
         </div>
-    </div>
-);
+    );
+};
 
 // --- Settings Component implementation (from components/Settings.tsx) ---
 const SettingsComponent: React.FC = () => {
@@ -4414,6 +4560,75 @@ function renderSettingsContent(activeTab: any, props: any) {
     return null;
 }
 
+// --- Modal de Suporte
+const SupportModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
+    const { t } = useLanguage();
+    return (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex justify-center items-center z-[100]" onClick={onClose}>
+            <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-8 w-full max-w-md transform transition-all border border-slate-200 dark:border-slate-700" onClick={e => e.stopPropagation()}>
+                <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-2xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                        <ChatIcon className="w-8 h-8 text-blue-600" />
+                        Suporte FlowEstac
+                    </h3>
+                    <button onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors">
+                        <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </button>
+                </div>
+
+                <p className="text-slate-600 dark:text-slate-400 mb-8 text-lg leading-relaxed">
+                    Precisa de ajuda? Nossa equipe está pronta para te atender. Escolha um dos canais abaixo:
+                </p>
+
+                <div className="space-y-4">
+                    <a
+                        href="https://wa.me/5551998595952"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-4 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800/50 rounded-xl hover:bg-green-100 dark:hover:bg-green-900/40 transition-all group"
+                    >
+                        <div className="bg-green-500 text-white p-2 rounded-lg group-hover:scale-110 transition-transform">
+                            <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                                <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z" />
+                            </svg>
+                        </div>
+                        <div>
+                            <div className="font-bold text-slate-800 dark:text-white">WhatsApp</div>
+                            <div className="text-sm text-slate-500 dark:text-slate-400">(51) 99859-5952</div>
+                        </div>
+                    </a>
+
+                    <a
+                        href="mailto:flowestac@gmail.com"
+                        className="flex items-center gap-4 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800/50 rounded-xl hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-all group"
+                    >
+                        <div className="bg-blue-600 text-white p-2 rounded-lg group-hover:scale-110 transition-transform">
+                            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                            </svg>
+                        </div>
+                        <div>
+                            <div className="font-bold text-slate-800 dark:text-white">E-mail</div>
+                            <div className="text-sm text-slate-500 dark:text-slate-400">flowestac@gmail.com</div>
+                        </div>
+                    </a>
+                </div>
+
+                <div className="mt-8 pt-6 border-t border-slate-100 dark:border-slate-700 text-center">
+                    <button
+                        onClick={onClose}
+                        className="w-full py-3 bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-200 font-bold rounded-xl hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors"
+                    >
+                        Fechar
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 // =================================================================
 // MAIN APP COMPONENT
 // =================================================================
@@ -4423,6 +4638,7 @@ const App: React.FC = () => {
     const { isDataLoaded, setSystemLogs, generalSettings, setGeneralSettings, nfseConfig } = useData();
     const [updateReady, setUpdateReady] = useState(false);
     const [licenseStatus, setLicenseStatus] = useState<'checking' | 'active' | 'blocked' | 'offline'>('checking');
+    const [isSupportModalOpen, setIsSupportModalOpen] = useState(false);
 
     const handleLogout = () => {
         if (loggedInUser) {
@@ -4432,112 +4648,119 @@ const App: React.FC = () => {
         setLoggedInUser(null);
     };
 
+    // --- License Check ---
+    const checkLicense = async () => {
+        const GRACE_PERIOD_DAYS = 5;
+        const TRIAL_PERIOD_DAYS = 14;
+        const ADMIN_CNPJ = '48062404000136'; // Admin CNPJ for bypass
+        const now = new Date();
+
+        try {
+            let currentStatus: 'checking' | 'active' | 'blocked' | 'offline' = 'checking';
+
+            // Admin bypass
+            const cleanCnpj = nfseConfig?.cnpj?.replace(/\D/g, '') || '';
+            if (cleanCnpj === ADMIN_CNPJ) {
+                console.log('[LICENSE] Admin bypass detectado.');
+                setLicenseStatus('active');
+                return;
+            }
+
+            // Initialize trial if not set
+            let installDateStr = generalSettings.installationDate;
+            if (!installDateStr) {
+                installDateStr = now.toISOString();
+                console.log('[LICENSE] Data de instalação não encontrada, inicializando trial hoje:', installDateStr);
+                setGeneralSettings((prev: any) => ({ ...prev, installationDate: installDateStr }));
+            }
+
+            const installDate = new Date(installDateStr);
+            const diffTrialTime = now.getTime() - installDate.getTime();
+            const diffTrialDays = Math.floor(diffTrialTime / (1000 * 60 * 60 * 24));
+            const isTrialActive = diffTrialDays < TRIAL_PERIOD_DAYS;
+
+            console.log(`[LICENSE] Dias desde instalação: ${diffTrialDays}. Trial ativo: ${isTrialActive}`);
+
+            const getStatusByTrial = () => {
+                const status = isTrialActive ? 'active' : 'blocked';
+                console.log(`[LICENSE] Aplicando status baseado no Trial: ${status}`);
+                return status;
+            };
+
+            // Verifica licença via Firebase
+            if (nfseConfig && nfseConfig.cnpj && nfseConfig.cnpj.trim() !== '') {
+                console.log('[LICENSE] Verificando licença via Firebase para CNPJ:', nfseConfig.cnpj);
+                try {
+                    const { doc, getDoc } = await import('firebase/firestore');
+                    const { db } = await import('./src/services/firebase');
+
+                    // Busca pelo CNPJ apenas números
+                    const cleanCnpjQuery = nfseConfig.cnpj.replace(/\D/g, '');
+                    const docRef = doc(db, 'licenses', cleanCnpjQuery);
+                    const docSnap = await getDoc(docRef);
+
+                    if (docSnap.exists()) {
+                        const licenseData = docSnap.data();
+                        console.log('[LICENSE] Dados da licença encontrados no Firebase:', licenseData);
+                        if (licenseData.status === 'blocked') {
+                            currentStatus = 'blocked';
+                            console.log('[LICENSE] Status da licença no Firebase é BLOCKED.');
+                        } else if (licenseData.status === 'active') {
+                            currentStatus = 'active';
+                            console.log('[LICENSE] Status da licença no Firebase é ACTIVE.');
+                        } else {
+                            console.log('[LICENSE] Status desconhecido no Firebase, recorrendo ao Trial.');
+                            currentStatus = getStatusByTrial();
+                        }
+                    } else {
+                        console.log('[LICENSE] CNPJ não encontrado no Firebase, recorrendo ao Trial.');
+                        currentStatus = getStatusByTrial();
+                    }
+
+                    if (currentStatus === 'active') {
+                        setGeneralSettings((prev: any) => ({ ...prev, lastLicenseCheck: now.toISOString() }));
+                    }
+                } catch (firebaseErr: any) {
+                    console.error('[LICENSE] Erro ao buscar no Firebase:', firebaseErr.message);
+                    // Offline ou erro - verifica período de carência da última verificação bem sucedida
+                    const lastCheckStr = generalSettings.lastLicenseCheck;
+                    if (lastCheckStr) {
+                        const lastCheck = new Date(lastCheckStr);
+                        const diffTime = Math.abs(now.getTime() - lastCheck.getTime());
+                        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                        console.log(`[LICENSE] Último check online bem sucedido há ${diffDays} dias.`);
+
+                        if (diffDays > GRACE_PERIOD_DAYS) {
+                            console.log(`[LICENSE] Período de carência de ${GRACE_PERIOD_DAYS} dias expirado.`);
+                            currentStatus = getStatusByTrial();
+                        } else {
+                            console.log('[LICENSE] Dentro do período de carência offline, mantendo ACTIVE.');
+                            currentStatus = 'active';
+                        }
+                    } else {
+                        console.log('[LICENSE] Nunca houve check online bem sucedido, recorrendo ao Trial.');
+                        currentStatus = getStatusByTrial();
+                    }
+                }
+            } else {
+                console.log('[LICENSE] CNPJ não informado nas configurações, recorrendo ao Trial.');
+                currentStatus = getStatusByTrial();
+            }
+
+            setLicenseStatus(currentStatus);
+
+        } catch (err) {
+            console.error('[LICENSE] Erro crítico na verificação:', err);
+            setLicenseStatus('offline');
+        }
+    };
+
     useEffect(() => {
         if (window.electronAPI) {
             window.electronAPI.onUpdateReady(() => {
                 setUpdateReady(true);
             });
         }
-
-        // --- License Check ---
-        const checkLicense = async () => {
-            const GRACE_PERIOD_DAYS = 5;
-            const TRIAL_PERIOD_DAYS = 14;
-            const ADMIN_CNPJ = '48062404000136'; // Admin CNPJ for bypass
-            const now = new Date();
-
-            try {
-                let currentStatus: 'checking' | 'active' | 'blocked' | 'offline' = 'checking';
-
-                // Admin bypass
-                const cleanCnpj = nfseConfig?.cnpj?.replace(/\D/g, '') || '';
-                if (cleanCnpj === ADMIN_CNPJ) {
-                    setLicenseStatus('active');
-                    return;
-                }
-
-                // Initialize trial if not set
-                let installDateStr = generalSettings.installationDate;
-                if (!installDateStr) {
-                    installDateStr = now.toISOString();
-                    setGeneralSettings((prev: any) => ({ ...prev, installationDate: installDateStr }));
-                }
-
-                const installDate = new Date(installDateStr);
-                const diffTrialTime = now.getTime() - installDate.getTime();
-                const diffTrialDays = Math.floor(diffTrialTime / (1000 * 60 * 60 * 24));
-                const isTrialActive = diffTrialDays <= TRIAL_PERIOD_DAYS;
-
-                const getStatusOverride = (status: 'active' | 'blocked' | 'offline') => {
-                    if (status === 'blocked' && isTrialActive) return 'active'; // Allow trial access
-                    return status;
-                };
-
-                // Verifica licença via Asaas usando o CNPJ local (do NFSE Config)
-                if (nfseConfig && nfseConfig.cnpj) {
-                    console.log('[LICENSE] Verificando licença via Asaas...');
-                    const result = await window.electronAPI.checkAsaasLicense(nfseConfig.cnpj);
-
-                    if (!result.success) {
-                        // Offline ou erro - verifica período de carência
-                        const lastCheckStr = generalSettings.lastLicenseCheck;
-                        if (lastCheckStr) {
-                            const lastCheck = new Date(lastCheckStr);
-                            const diffTime = Math.abs(now.getTime() - lastCheck.getTime());
-                            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-                            if (diffDays > GRACE_PERIOD_DAYS) {
-                                currentStatus = getStatusOverride('blocked');
-                            } else {
-                                currentStatus = 'offline';
-                            }
-                        } else {
-                            currentStatus = 'offline';
-                        }
-                    } else if (result.status === 'blocked') {
-                        currentStatus = getStatusOverride('blocked');
-                    } else {
-                        currentStatus = 'active';
-                        setGeneralSettings((prev: any) => ({ ...prev, lastLicenseCheck: now.toISOString() }));
-                    }
-                } else {
-                    // Fallback para GitHub se não houver API Key do Asaas
-                    console.log('[LICENSE] Verificando licença via GitHub...');
-                    const response = await fetch('https://raw.githubusercontent.com/jorceli/Licencas/main/status.json', { cache: 'no-store' }).catch(() => null);
-
-                    if (!response) {
-                        const lastCheckStr = generalSettings.lastLicenseCheck;
-                        if (lastCheckStr) {
-                            const lastCheck = new Date(lastCheckStr);
-                            const diffTime = Math.abs(now.getTime() - lastCheck.getTime());
-                            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-                            if (diffDays > GRACE_PERIOD_DAYS) {
-                                currentStatus = getStatusOverride('blocked');
-                            } else {
-                                currentStatus = 'offline';
-                            }
-                        } else {
-                            currentStatus = 'offline';
-                        }
-                    } else {
-                        const json = await response.json();
-                        if (json.globalStatus === 'blocked') {
-                            currentStatus = getStatusOverride('blocked');
-                        } else {
-                            currentStatus = 'active';
-                            setGeneralSettings((prev: any) => ({ ...prev, lastLicenseCheck: now.toISOString() }));
-                        }
-                    }
-                }
-
-                setLicenseStatus(currentStatus);
-
-            } catch (err) {
-                console.error('[LICENSE] Erro na verificação:', err);
-                setLicenseStatus('offline');
-            }
-        };
 
         checkLicense();
         const interval = setInterval(checkLicense, 1000 * 60 * 30); // 30 min
@@ -4555,17 +4778,19 @@ const App: React.FC = () => {
     return (
         <AuthContext.Provider value={{ loggedInUser }}>
             <div className="flex h-screen">
+                {isSupportModalOpen && <SupportModal onClose={() => setIsSupportModalOpen(false)} />}
                 <Sidebar
                     currentPage={currentPage}
                     setCurrentPage={setCurrentPage}
                     loggedInUser={loggedInUser}
                     onLogout={handleLogout}
+                    onSupportClick={() => setIsSupportModalOpen(true)}
                     updateReady={updateReady}
                     licenseStatus={licenseStatus}
                     nfseConfig={nfseConfig}
                 />
                 <div className="flex-1 p-4 overflow-y-auto">
-                    {licenseStatus === 'blocked' && <LicenseBlockedScreen />}
+                    {licenseStatus === 'blocked' && <LicenseBlockedScreen onRecheck={checkLicense} />}
                     {currentPage === 'dashboard' && <Dashboard />}
                     {currentPage === 'movements' && <Movements />}
                     {currentPage === 'customers' && <Customers />}

@@ -43,7 +43,7 @@ Para simplificar a integração com plataformas de infoprodutos (Hotmart, Eduzz,
 4. **Vendas Manuais:** Clientes fechados no boca-a-boca/Pix direto podem ser cadastrados manualmente direto no painel do Firebase ou numa telinha admin separada.
 
 ---
-*Nota: Estas informações foram compiladas durante a versão 1.1.42 para referência em desenvolvimento futuro.*
+*Nota: Estas informações foram compiladas durante a versão 1.1.47 para referência em desenvolvimento futuro.*
 
 ## 4. Padronização de Versão
 

@@ -63,9 +63,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   checkCertificateInfo: (certPath, certPassword) => ipcRenderer.invoke('check-certificate-info', { certPath, certPassword }),
 
   /**
-   * Verifica o status da licença no Asaas.
+   * License checking via Asaas removed.
    */
-  checkAsaasLicense: (cnpj) => ipcRenderer.invoke('check-asaas-license', { cnpj }),
 
   /**
    * Fecha a aplicação.
