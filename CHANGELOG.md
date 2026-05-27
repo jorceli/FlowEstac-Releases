@@ -1,3 +1,15 @@
+# FlowEstac v1.1.55 - Changelog
+
+## Correções e Melhorias (v1.1.55)
+### 📊 Fechamento de Caixa
+- **Relatório de Impressão Completo:** O cupom de fechamento agora inclui todos os detalhes visíveis na tela, incluindo o detalhamento de Sangrias, Despesas e a separação entre recebimentos de Rotativo e Mensalistas.
+- **Detalhamento de Transações:** Adicionada a descrição individual de cada saída de caixa no relatório impresso.
+
+### 🔄 Sistema de Atualização
+- **Feedback de Versão:** A mensagem de status de atualização agora exibe explicitamente a versão atual do sistema, confirmando que o usuário está na versão mais recente.
+
+---
+
 # FlowEstac v1.1.54 - Changelog
 
 ## Correções e Melhorias (v1.1.54)

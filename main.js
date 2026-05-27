@@ -1,4 +1,4 @@
-﻿const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
@@ -38,7 +38,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  console.log('FlowEstac Desktop v1.1.54 Iniciado');
+  console.log('FlowEstac Desktop v1.1.55 Iniciado');
   createWindow();
 
   const sendUpdateStatus = (status) => {
@@ -245,9 +245,9 @@ autoUpdater.on('update-available', (info) => {
 });
 
 autoUpdater.on('update-not-available', (info) => {
-  console.log('Nenhuma atualiza\u00e7\u00e3o dispon\u00edvel.');
+  console.log('Nenhuma atualização disponível.');
   const win = BrowserWindow.getAllWindows()[0];
-  if (win) win.webContents.send('update_status', 'Sistema atualizado.');
+  if (win) win.webContents.send('update_status', `Sistema na versão mais recente: v${app.getVersion()}`);
 });
 
 autoUpdater.on('error', (err) => {

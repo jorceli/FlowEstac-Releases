@@ -1,4 +1,4 @@
-﻿
+
 import React, { useState, useMemo, useEffect, createContext, useContext, ReactNode, useRef } from 'react';
 import ReactDOM from 'react-dom/client';
 import { GeneralSettings, PricingSettings, ServicesSettings, PaymentsSettings, AgreementsSettings, CouponsSettings, PrintingSettings, BackupSettings, NfseSettings, ModulesSettings } from './components/settings';
@@ -2145,12 +2145,28 @@ const printEntryCoupon = async (movement: VehicleMovement, couponConfig: CouponP
     }
 };
 
-const printCashClosingReport = async (summary: { totalsByPaymentMethod: { [key: string]: number }, grandTotal: number, totalExits: number, totalEntries: number, currentlyParked: number, openingBalance: number, monthlyPayments: number, withdrawals: number, expenses: number, netCash: number }, couponConfig: CouponPrintConfig, printerConfig: PrinterConfig) => {
+const printCashClosingReport = async (summary: { 
+    totalsByPaymentMethod: { [key: string]: number }, 
+    rotativoTotalsByMethod: { [key: string]: number },
+    mensalistaTotalsByMethod: { [key: string]: number },
+    grandTotal: number, 
+    rotativoTotal: number,
+    totalExits: number, 
+    totalEntries: number, 
+    currentlyParked: number, 
+    openingBalance: number, 
+    monthlyPayments: number, 
+    withdrawals: number, 
+    expenses: number, 
+    netCash: number,
+    todayTransactions: CashTransaction[],
+    todayMonthlyPayments: MonthlyPaymentLog[]
+}, couponConfig: CouponPrintConfig, printerConfig: PrinterConfig) => {
     const reportDate = new Date().toLocaleString('pt-BR');
 
     const data: any[] = [];
 
-    // Header Dinâmico (Split por linhas)
+    // Header Dinâmico
     const headerLines = (couponConfig.headerMessage || '').split('\n');
     headerLines.forEach(line => {
         if (line.trim()) {
@@ -2159,7 +2175,7 @@ const printCashClosingReport = async (summary: { totalsByPaymentMethod: { [key: 
     });
 
     data.push(
-        { type: 'text', value: removeAccents('Fechamento de Caixa'), style: { textAlign: 'center', fontSize: '12px', fontWeight: 'bold' } },
+        { type: 'text', value: removeAccents('Fechamento de Caixa'), style: { textAlign: 'center', fontSize: '14px', fontWeight: 'bold', marginTop: '5px' } },
         { type: 'text', value: removeAccents(`Data: ${reportDate}`), style: { textAlign: 'center', fontSize: '10px', marginBottom: '5px' } },
         { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } },
     );
@@ -2171,46 +2187,76 @@ const printCashClosingReport = async (summary: { totalsByPaymentMethod: { [key: 
         { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } },
     );
 
-    // Recebimentos
-    data.push({ type: 'text', value: removeAccents('RECEBIMENTOS:'), style: { fontSize: "10px", fontWeight: 'bold', marginTop: '5px' } });
+    // Recebimentos Avulsos (Rotativos)
+    if (summary.rotativoTotal > 0) {
+        data.push({ type: 'text', value: removeAccents('RECEBIMENTOS ROTATIVO:'), style: { fontSize: "10px", fontWeight: 'bold', marginTop: '5px' } });
+        Object.entries(summary.rotativoTotalsByMethod).forEach(([method, total]) => {
+            if (total > 0) {
+                data.push({ type: 'text', value: removeAccents(`${method}: R$ ${total.toFixed(2).replace('.', ',')}`), style: { fontSize: "10px" } });
+            }
+        });
+        data.push({ type: 'text', value: `Subtotal Rotativo: R$ ${summary.rotativoTotal.toFixed(2).replace('.', ',')}`, style: { fontSize: "10px", textAlign: 'right', fontStyle: 'italic' } });
+    }
 
-    Object.entries(summary.totalsByPaymentMethod).forEach(([method, total]) => {
-        const totalFormatted = `R$ ${(total as number).toFixed(2).replace('.', ',')}`;
-        data.push({ type: 'text', value: removeAccents(`${method}: ${totalFormatted}`), style: { fontSize: "10px" } });
-    });
+    // Recebimentos Mensalistas
+    if (summary.monthlyPayments > 0) {
+        data.push({ type: 'text', value: removeAccents('RECEBIMENTOS MENSALISTA:'), style: { fontSize: "10px", fontWeight: 'bold', marginTop: '8px' } });
+        Object.entries(summary.mensalistaTotalsByMethod).forEach(([method, total]) => {
+            if (total > 0) {
+                data.push({ type: 'text', value: removeAccents(`${method}: R$ ${total.toFixed(2).replace('.', ',')}`), style: { fontSize: "10px" } });
+            }
+        });
+        data.push({ type: 'text', value: `Subtotal Mensalista: R$ ${summary.monthlyPayments.toFixed(2).replace('.', ',')}`, style: { fontSize: "10px", textAlign: 'right', fontStyle: 'italic' } });
+    }
 
     data.push(
-        { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } },
+        { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center', marginTop: '5px' } },
         { type: 'text', value: `TOTAL RECEBIDO: R$ ${summary.grandTotal.toFixed(2).replace('.', ',')}`, style: { fontSize: "11px", fontWeight: 'bold', textAlign: 'right' } },
         { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } },
     );
 
-    // Saídas
-    data.push(
-        { type: 'text', value: removeAccents('SAIDAS:'), style: { fontSize: "10px", fontWeight: 'bold', marginTop: '5px' } },
-        { type: 'text', value: removeAccents(`Sangrias: R$ ${summary.withdrawals.toFixed(2).replace('.', ',')}`), style: { fontSize: "10px" } },
-        { type: 'text', value: removeAccents(`Despesas: R$ ${summary.expenses.toFixed(2).replace('.', ',')}`), style: { fontSize: "10px" } },
-        { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } },
-        { type: 'text', value: `TOTAL SAIDAS: R$ ${(summary.withdrawals + summary.expenses).toFixed(2).replace('.', ',')}`, style: { fontSize: "11px", fontWeight: 'bold', textAlign: 'right' } },
-        { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } },
-    );
+    // Saídas Detalhadas
+    if (summary.withdrawals > 0 || summary.expenses > 0) {
+        data.push({ type: 'text', value: removeAccents('SAIDAS (DETALHE):'), style: { fontSize: "10px", fontWeight: 'bold', marginTop: '5px' } });
+        
+        summary.todayTransactions.forEach(t => {
+            const typeLabel = t.type === 'withdrawal' ? 'SANGRIA' : 'DESPESA';
+            data.push({ 
+                type: 'text', 
+                value: removeAccents(`${typeLabel}: R$ ${t.amount.toFixed(2).replace('.', ',')}`), 
+                style: { fontSize: "10px" } 
+            });
+            data.push({ 
+                type: 'text', 
+                value: removeAccents(` -> ${t.description}`), 
+                style: { fontSize: "9px", fontStyle: 'italic', marginLeft: '5px' } 
+            });
+        });
+
+        data.push(
+            { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } },
+            { type: 'text', value: `TOTAL SAIDAS: R$ ${(summary.withdrawals + summary.expenses).toFixed(2).replace('.', ',')}`, style: { fontSize: "11px", fontWeight: 'bold', textAlign: 'right' } },
+            { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } },
+        );
+    }
 
     // Saldo Final
     data.push(
-        { type: 'text', value: removeAccents('SALDO EM CAIXA:'), style: { fontSize: "12px", fontWeight: 'bold', marginTop: '5px' } },
+        { type: 'text', value: removeAccents('SALDO EM CAIXA:'), style: { fontSize: "12px", fontWeight: 'bold', marginTop: '8px' } },
         { type: 'text', value: `R$ ${summary.netCash.toFixed(2).replace('.', ',')}`, style: { fontSize: "14px", textAlign: 'right', fontWeight: 'bold' } },
         { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } },
     );
 
     // Estatísticas
     data.push(
-        { type: 'text', value: removeAccents(`Entradas:  ${summary.totalEntries}`), style: { fontSize: "10px" } },
-        { type: 'text', value: removeAccents(`Saidas:    ${summary.totalExits}`), style: { fontSize: "10px" } },
-        { type: 'text', value: removeAccents(`No Patio:  ${summary.currentlyParked}`), style: { fontSize: "10px" } },
-        { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center' } }
+        { type: 'text', value: removeAccents('ESTATISTICAS:'), style: { fontSize: "10px", fontWeight: 'bold', marginTop: '5px' } },
+        { type: 'text', value: removeAccents(`Entradas (Hoje):  ${summary.totalEntries}`), style: { fontSize: "10px" } },
+        { type: 'text', value: removeAccents(`Saidas (Hoje):    ${summary.totalExits}`), style: { fontSize: "10px" } },
+        { type: 'text', value: removeAccents(`No Patio:        ${summary.currentlyParked}`), style: { fontSize: "10px" } },
+        { type: 'text', value: '-'.repeat(28), style: { textAlign: 'center', marginBottom: '5px' } }
     );
 
-    // Footer Dinâmico
+    // Footer
     const footerLines = (couponConfig.footerMessage || '').split('\n');
     footerLines.forEach(line => {
         if (line.trim()) {
@@ -2218,7 +2264,7 @@ const printCashClosingReport = async (summary: { totalsByPaymentMethod: { [key: 
         }
     });
 
-    pushPaperFeed(data, 18);
+    pushPaperFeed(data, 8);
 
     if (window.electronAPI && window.electronAPI.printData) {
         await window.electronAPI.printData(data, printerConfig.printerName, printerConfig.printWidth);
@@ -3039,6 +3085,8 @@ const CashClosingModal: React.FC<{ isOpen: boolean, onClose: () => void }> = ({ 
 
         // Total por forma de pagamento (saídas de veículos)
         const totalsByPaymentMethod: { [key: string]: number } = {};
+        const rotativoTotalsByMethod: { [key: string]: number } = {};
+        const mensalistaTotalsByMethod: { [key: string]: number } = {};
         let grandTotal = 0;
         let paidExitsCount = 0;
 
@@ -3046,6 +3094,7 @@ const CashClosingModal: React.FC<{ isOpen: boolean, onClose: () => void }> = ({ 
             const paid = typeof m.totalPaid === 'number' ? m.totalPaid : Number(m.totalPaid);
             if (m.paymentMethod && Number.isFinite(paid) && paid > 0) {
                 totalsByPaymentMethod[m.paymentMethod] = (totalsByPaymentMethod[m.paymentMethod] || 0) + paid;
+                rotativoTotalsByMethod[m.paymentMethod] = (rotativoTotalsByMethod[m.paymentMethod] || 0) + paid;
                 grandTotal += paid;
                 paidExitsCount++;
             }
@@ -3061,6 +3110,7 @@ const CashClosingModal: React.FC<{ isOpen: boolean, onClose: () => void }> = ({ 
         todayMonthlyPayments.forEach(log => {
             const method = log.paymentMethod || 'DINHEIRO';
             totalsByPaymentMethod[method] = (totalsByPaymentMethod[method] || 0) + log.amountPaid;
+            mensalistaTotalsByMethod[method] = (mensalistaTotalsByMethod[method] || 0) + log.amountPaid;
         });
 
         // Transações de caixa do dia
@@ -3083,7 +3133,10 @@ const CashClosingModal: React.FC<{ isOpen: boolean, onClose: () => void }> = ({ 
 
         return {
             totalsByPaymentMethod,
+            rotativoTotalsByMethod,
+            mensalistaTotalsByMethod,
             grandTotal: totalIn,
+            rotativoTotal: grandTotal,
             totalExits: paidExitsCount,
             totalEntries: movementsTodayEntries.length,
             currentlyParked,
@@ -3119,27 +3172,54 @@ const CashClosingModal: React.FC<{ isOpen: boolean, onClose: () => void }> = ({ 
 
                 {/* Entradas de Caixa */}
                 <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg space-y-3">
-                    <h3 className="font-semibold text-green-800 dark:text-green-300 mb-2">💵 Entradas</h3>
+                    <h3 className="font-semibold text-green-800 dark:text-green-300 mb-2 flex justify-between items-center">
+                        <span>💵 Entradas</span>
+                        <span className="text-xs font-normal opacity-70">Total do Dia</span>
+                    </h3>
 
-                    <div className="space-y-2">
-                        <p className="text-sm font-medium text-slate-600 dark:text-slate-400">Recebimentos:</p>
-                        {Object.entries(summary.totalsByPaymentMethod).length > 0 ? (
-                            Object.entries(summary.totalsByPaymentMethod).map(([method, total]) => (
-                                <div key={method} className="flex justify-between items-center text-sm">
-                                    <span className="text-slate-600 dark:text-slate-300">{method}:</span>
-                                    <span className="font-semibold font-mono">
-                                        {Number(total).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                                    </span>
-                                </div>
-                            ))
-                        ) : (
-                            <p className="text-slate-500 text-sm">Nenhum recebimento hoje</p>
+                    <div className="space-y-4">
+                        {/* Rotativo */}
+                        {summary.rotativoTotal > 0 && (
+                            <div className="space-y-1">
+                                <p className="text-xs font-bold text-green-700 dark:text-green-400 uppercase tracking-wider">Rotativo:</p>
+                                {Object.entries(summary.rotativoTotalsByMethod).map(([method, total]) => (
+                                    total > 0 && (
+                                        <div key={`rot-${method}`} className="flex justify-between items-center text-sm pl-2 border-l-2 border-green-200 dark:border-green-800">
+                                            <span className="text-slate-600 dark:text-slate-300">{method}:</span>
+                                            <span className="font-semibold font-mono">
+                                                {Number(total).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                            </span>
+                                        </div>
+                                    )
+                                ))}
+                            </div>
+                        )}
+
+                        {/* Mensalista */}
+                        {summary.monthlyPayments > 0 && (
+                            <div className="space-y-1">
+                                <p className="text-xs font-bold text-blue-700 dark:text-blue-400 uppercase tracking-wider">Mensalistas:</p>
+                                {Object.entries(summary.mensalistaTotalsByMethod).map(([method, total]) => (
+                                    total > 0 && (
+                                        <div key={`mens-${method}`} className="flex justify-between items-center text-sm pl-2 border-l-2 border-blue-200 dark:border-blue-800">
+                                            <span className="text-slate-600 dark:text-slate-300">{method}:</span>
+                                            <span className="font-semibold font-mono">
+                                                {Number(total).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                            </span>
+                                        </div>
+                                    )
+                                ))}
+                            </div>
+                        )}
+
+                        {summary.grandTotal === 0 && (
+                            <p className="text-slate-500 text-sm text-center py-2">Nenhum recebimento hoje</p>
                         )}
                     </div>
 
-                    <div className="border-t dark:border-slate-600 pt-2">
+                    <div className="border-t border-green-200 dark:border-green-800/50 pt-2 mt-2">
                         <div className="flex justify-between items-center">
-                            <span className="font-semibold">Total Entradas:</span>
+                            <span className="font-bold text-slate-700 dark:text-slate-200">Total Recebido:</span>
                             <span className="text-xl font-bold text-green-600 dark:text-green-400">
                                 {summary.grandTotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                             </span>
@@ -3149,25 +3229,27 @@ const CashClosingModal: React.FC<{ isOpen: boolean, onClose: () => void }> = ({ 
 
                 {/* Saídas de Caixa */}
                 <div className="bg-red-50 dark:bg-red-900/20 p-4 rounded-lg space-y-3">
-                    <h3 className="font-semibold text-red-800 dark:text-red-300 mb-2">💸 Saídas</h3>
+                    <h3 className="font-semibold text-red-800 dark:text-red-300 mb-2">💸 Saídas Detalhadas</h3>
 
-                    <div className="flex justify-between items-center text-sm">
-                        <span className="text-slate-600 dark:text-slate-300">Sangrias:</span>
-                        <span className="font-semibold font-mono text-red-600 dark:text-red-400">
-                            {summary.withdrawals.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                        </span>
+                    <div className="space-y-2 max-h-40 overflow-y-auto pr-2 custom-scrollbar">
+                        {summary.todayTransactions.length > 0 ? (
+                            summary.todayTransactions.map((t, idx) => (
+                                <div key={t.id || idx} className="text-xs border-b border-red-100 dark:border-red-900/30 pb-2">
+                                    <div className="flex justify-between font-bold text-red-700 dark:text-red-400">
+                                        <span>{t.type === 'withdrawal' ? 'SANGRIA' : 'DESPESA'}</span>
+                                        <span>{t.amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                                    </div>
+                                    <p className="text-slate-500 italic mt-0.5">{t.description}</p>
+                                </div>
+                            ))
+                        ) : (
+                            <p className="text-slate-500 text-sm text-center">Nenhuma saída registrada</p>
+                        )}
                     </div>
 
-                    <div className="flex justify-between items-center text-sm">
-                        <span className="text-slate-600 dark:text-slate-300">Despesas:</span>
-                        <span className="font-semibold font-mono text-red-600 dark:text-red-400">
-                            {summary.expenses.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                        </span>
-                    </div>
-
-                    <div className="border-t dark:border-slate-600 pt-2">
+                    <div className="border-t border-red-200 dark:border-red-800/50 pt-2">
                         <div className="flex justify-between items-center">
-                            <span className="font-semibold">Total Saídas:</span>
+                            <span className="font-bold text-slate-700 dark:text-slate-200">Total Saídas:</span>
                             <span className="text-xl font-bold text-red-600 dark:text-red-400">
                                 {(summary.withdrawals + summary.expenses).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                             </span>
